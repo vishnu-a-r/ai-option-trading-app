@@ -104,10 +104,18 @@ Two consequences beyond the obvious:
 | technical_setup | 0.30 | ⚠️ wrong exchange, volume unusable |
 | fundamental | 0.30 | ❌ none |
 | institutional | 0.20 | ❌ none |
-| futures_confirmation | 0.10 | ❌ none |
+| futures_confirmation | 0.10 | ❌ none (and applies to only ~180 of 500 — see below) |
 | relative_strength | 0.10 | ⚠️ needs a Nifty 500 index series — untested |
 
 **70% of the composite has no source and the remaining 30% is on the wrong exchange.**
+
+A second scoring problem surfaced while planning against this table: only ~180 of the
+Nifty 500 have stock futures, so under a naive blend the other ~320 score zero on a
+0.10-weight family and can never rank as well as an equivalent F&O name. `rank()`
+renormalises over the families that apply instead, and records `families_used` —
+which matters acutely right now, since with no fundamental or institutional source
+every candidate would otherwise be ranked on two of five inputs behind a
+confident-looking composite number.
 Per the README build order, strategy code does not start here. The honest answer to
 SPEC §12.1 is that the data foundation is not confirmed.
 
@@ -136,10 +144,13 @@ first; it is also free.
 `config/strategy.yaml`:
 - Sector caps need a taxonomy pinned before either number means anything
   (`risk.sector_taxonomy`, currently `null`).
-- Exposure had to be defined as notional on both sides, which surfaces that at
-  ₹2,00,000 capital a single stock-futures lot breaches `max_position_pct_of_capital`
-  on its own — **the short side is structurally unfundable at current capital.**
-  The screen should still run and report; expect every short refused at that gate.
+- The short side was **dropped by decision** after this audit (SPEC §4). It was also
+  structurally unfundable: at ₹2,00,000 capital a single stock-futures lot breaches
+  `max_position_pct_of_capital` on its own. Long-only removes that problem and
+  simplifies exposure to qty × price — but it exposed a separate one the shorts had
+  been masking, now fixed: `max_concurrent_positions × max_position_pct_of_capital`
+  is 150% of capital, and the aggregate *risk* cap does not constrain *cash*. Added
+  `risk.max_deployed_pct_of_capital`.
 - SPEC §9 says to port the sizing formula from the existing Excel system. Still
   outstanding — `src/risk/sizing.py` must not be filled in from first principles.
 

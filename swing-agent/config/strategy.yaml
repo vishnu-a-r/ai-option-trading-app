@@ -1,5 +1,9 @@
 # All tunable strategy parameters. Logic lives in code, numbers live here.
 # Nothing in src/ should contain a hardcoded threshold.
+#
+# LONG ONLY. The short side was dropped by decision - see SPEC.md section 4.
+# There is no short_breakdown block, no short_flag, and no top_n_short, and
+# nothing here should grow one back. Every position is cash equity, held long.
 
 long_pullback:
   trend:
@@ -21,19 +25,6 @@ long_pullback:
     cpr_timeframe: weekly     # NOT daily - daily CPR is an intraday tool
     relative_strength_periods: [21, 63]
 
-short_breakdown:
-  universe: fno_only          # cash equity cannot be held short overnight in India
-  trend:
-    price_below_sma: 50
-    sma_fast_below_slow: [50, 200]
-    require_lower_high_low: true
-  momentum:
-    rsi_period: 14
-    rsi_min: 40
-    rsi_max: 70               # bounced into resistance, not already collapsed
-  confirmation:
-    rejection_at: [prior_support_turned_resistance, declining_sma_20]
-
 fundamental:
   long_gate:
     # DELIBERATELY NULL - blocked on the data audit, not forgotten.
@@ -50,11 +41,6 @@ fundamental:
     min_ocf_to_pat: null      # earnings quality
     max_promoter_pledge_pct: null
     revenue_growth_3y_min: null
-  short_flag:
-    margin_trend: declining
-    debt_trend: rising
-    ocf_negative: true
-    pledge_increasing: true
   sector_overrides:           # banking/NBFC metrics differ - do not apply one set
     BANKING: {}
     NBFC: {}
@@ -86,7 +72,6 @@ scoring:
     futures_confirmation: 0.10
     relative_strength: 0.10
   top_n_long: 10
-  top_n_short: 5
 
 risk:
   capital_inr: 200000
@@ -100,8 +85,8 @@ risk:
   risk_per_trade_pct: 1.0     # = Rs 2,000 risk per trade at current capital
 
   # There is NO fixed percentage stop. The stop is anchored just below the
-  # institutional stop cluster (below the pullback swing low for longs, above
-  # the rejection high for shorts), then pushed OUT by this ATR multiple so a
+  # institutional stop cluster (below the pullback swing low), then pushed OUT
+  # by this ATR multiple so a
   # routine stop sweep does not take the position out on a wick.
   # A fixed 2% stop would sit inside one day's normal range for most Nifty 500
   # midcaps - do not reintroduce one.
@@ -147,15 +132,19 @@ risk:
   # the data source happens to return.
   sector_taxonomy: null             # TODO choose: nse_macro | amfi | gics_sector | gics_sub_industry
 
-  # EXPOSURE IS DEFINED AS NOTIONAL, INCLUDING FOR SHORTS.
-  # Shorts are stock futures. Margin is ~15-20% of notional, so a margin-based
-  # definition would let one futures lot sit inside a 25% "position" while
-  # carrying 5x that in market exposure. Measure notional on both sides.
-  # Consequence worth seeing now rather than at signal time: at Rs 2,00,000
-  # capital a single stock futures lot is typically Rs 5-10 lakh notional, which
-  # breaches max_position_pct_of_capital on its own. The short side of this
-  # system is structurally unfundable at current capital - the screen should
-  # still run and report, but expect every short to be refused at this gate.
+  # CASH DEPLOYMENT CAP.
+  # Exposure is simply qty * price now that everything is a cash-equity long.
+  # This cap exists because the other numbers do not add up on their own:
+  # max_concurrent_positions * max_position_pct_of_capital = 6 * 25 = 150% of
+  # capital, which cannot be funded. The aggregate RISK cap does not catch it
+  # either - six tight-stop positions truncated to 25% exposure each carry
+  # roughly 0.5% risk apiece, about 3% aggregate, comfortably inside the 6%
+  # limit while demanding 150% of the account. Risk and cash are different
+  # constraints and both have to be stated.
+  # Refuse the position that would overdraw. Do not silently size it down:
+  # a position sized by anything other than the formula above breaks the
+  # equal-rupee-risk invariant that the whole block exists to protect.
+  max_deployed_pct_of_capital: 100
 
   max_aggregate_open_risk_pct: 6    # 6 full-risk positions - refuse the 7th
   time_stop_bars: 15                # setup went nowhere, free the capital

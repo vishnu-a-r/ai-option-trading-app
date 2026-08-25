@@ -80,4 +80,8 @@ def cpr(df: pd.DataFrame, timeframe: str = "weekly") -> pd.DataFrame:
 
 
 def support_resistance_levels(df: pd.DataFrame, lookback: int) -> list[float]:
-    """Prior pivot clusters - used for the short setup's rejection test."""
+    """Prior pivot clusters.
+
+    For the long screen these are overhead supply: the levels a pullback entry
+    has to clear, and the natural places to set targets.
+    """

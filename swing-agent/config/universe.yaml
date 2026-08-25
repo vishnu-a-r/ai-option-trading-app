@@ -9,5 +9,10 @@ exclusions:
   min_price: null
 
 fno_universe:
+  # NOT a universe filter. The system is long-only (SPEC.md section 4), so the
+  # full Nifty 500 is tradeable. This list only marks where futures confirmation
+  # is AVAILABLE - roughly 180 of the 500. Names outside it are scored on the
+  # families that do apply, with weights renormalised; they are not penalised
+  # for lacking a futures signal.
   source: nse_fno_list
   refresh: monthly

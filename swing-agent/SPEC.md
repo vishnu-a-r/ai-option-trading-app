@@ -11,8 +11,7 @@ Build it as a Python project with git version control. Deterministic logic in co
 ## 1. Universe & Hard Constraints
 
 - **Base universe:** Nifty 500 constituents (fetch current list, don't hardcode — it rebalances).
-- **Long candidates:** full Nifty 500.
-- **Short candidates:** ONLY stocks in the current F&O universe. Overnight shorting in cash equity is not permitted in India — swing shorts must be expressed through stock futures. Screen the F&O list separately and flag lot size + margin requirement for each short signal.
+- **Long candidates:** full Nifty 500. This is the only side traded — see Section 4.
 - Exclude: stocks in ASM/GSM surveillance frameworks, T2T segment, circuit-locked names, and anything with 20-day average traded value below a configurable floor (default ₹10 crore).
 
 ---
@@ -55,22 +54,25 @@ Confirmation layer (score, don't gate):
 - Weekly/monthly CPR: price above the central pivot, narrow CPR indicating a trending expectation (daily CPR is intraday-oriented — use higher timeframe here)
 - Relative strength vs Nifty 500 index over 1M/3M
 
-## 4. Short Setup — Mirror, But Not Symmetric
+## 4. Short Setup — DROPPED
 
-Do **not** simply invert the long screen. Shorts need their own fundamental logic:
+**Decision, 2026-08-25: this system is long-only.** The short screen, the short
+fundamental flags, and the F&O-only short universe are removed from the spec and from
+the code. `src/screens/short_breakdown.py` is deleted; `strategy.yaml` has no
+`short_breakdown` block, no `fundamental.short_flag`, and no `scoring.top_n_short`.
 
-- Deteriorating fundamentals: falling revenue/margin trend, rising debt, negative operating cash flow, promoter pledge increasing, auditor or governance flags
-- Price below 50 DMA, with 50 DMA below 200 DMA
-- Lower highs and lower lows
-- RSI(14) between 40 and 70 — bounced into resistance, not already collapsed
-- Rejection at a prior support-turned-resistance level or a declining moving average
-- Must be F&O-eligible; report lot size, margin, and current basis
+This is a decision, not unfinished work. Do not reintroduce a short screen — and in
+particular do not add one by inverting the long screen, which is what the original
+spec warned against: inverting it surfaces strong companies in temporary pullbacks,
+the worst possible short.
 
----
+Consequences elsewhere: every position is now cash equity held long, so exposure is
+simply qty × price, and the F&O list is no longer a universe filter — it only marks
+where futures confirmation is *available* (Section 7).
 
 ## 5. Fundamental Screen
 
-Applied to longs as a gate, and to shorts inverted as described above.
+Applied to longs as a gate.
 
 - Sales and profit growth (3Y and TTM), consistency of growth
 - ROE / ROCE thresholds
@@ -115,7 +117,7 @@ Composite score with configurable weights across: technical setup quality, funda
 
 ## 9. Risk Management
 
-- Stop-loss placement: below the pullback swing low for longs, above the rejection high for shorts, with an ATR-based buffer
+- Stop-loss placement: below the pullback swing low, with an ATR-based buffer
 - Position sizing derived from fixed fractional risk per trade — port the exact sizing formula from my existing Excel swing system rather than inventing one; ask me for it
 - Portfolio-level caps: max concurrent positions, max exposure to a single sector, max aggregate open risk
 - Exit rules: initial target, trailing logic, and a time-based exit if the setup goes nowhere

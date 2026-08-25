@@ -1,19 +1,12 @@
-"""Long setup: momentum pullback in an established uptrend."""
+"""Long setup: momentum pullback in an established uptrend.
+
+The only screen in this system. Shorts were dropped by decision - see SPEC.md
+section 4. Do not add an inverted copy of this file.
+"""
 from __future__ import annotations
-from dataclasses import dataclass, field
 import pandas as pd
 
-
-@dataclass
-class SetupResult:
-    symbol: str
-    passed: bool
-    gate_failures: list[str] = field(default_factory=list)  # why it was rejected
-    confirmations: dict[str, float] = field(default_factory=dict)  # scored, 0..1
-    entry: float | None = None
-    stop: float | None = None
-    targets: list[float] = field(default_factory=list)
-    reason: str = ""
+from .result import SetupResult
 
 
 def evaluate(df: pd.DataFrame, symbol: str, cfg: dict, ctx: dict) -> SetupResult:

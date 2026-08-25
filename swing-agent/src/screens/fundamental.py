@@ -1,4 +1,7 @@
-"""Fundamental scoring. Gate for longs, inverted flag for shorts."""
+"""Fundamental scoring. A gate for the long screen.
+
+Long-only (SPEC.md section 4), so there is no inverted short-side variant here.
+"""
 from __future__ import annotations
 import pandas as pd
 
@@ -23,7 +26,3 @@ def sector_thresholds(sector: str, cfg: dict) -> dict:
     score().
     """
 
-
-def deterioration_flags(symbol: str, statements: pd.DataFrame, cfg: dict) -> list[str]:
-    """Short-side signals: falling margin trend, rising debt, negative OCF,
-    increasing promoter pledge, auditor or governance flags."""

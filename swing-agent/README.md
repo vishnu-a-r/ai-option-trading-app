@@ -32,7 +32,7 @@ config/strategy.yaml     all thresholds and weights — no hardcoded numbers in 
 config/universe.yaml     universe definition and exclusions
 src/data/base.py         source Protocols — swap providers without touching strategy
 src/indicators/          pure functions on OHLCV
-src/screens/             long_pullback, short_breakdown, fundamental
+src/screens/             long_pullback, fundamental
 src/scoring/composite.py weighted rank across five signal families
 src/risk/sizing.py       stops, sizing, portfolio caps
 src/backtest/engine.py   5+ years, regime-split, survivorship-aware
@@ -42,17 +42,18 @@ run_daily.py             orchestration
 
 ## Two things not to get wrong
 
-**Shorts are F&O-only.** Cash equity cannot be held short overnight in India.
-The short universe is the stock futures list, not the Nifty 500.
-
-**The short screen is not an inverted long screen.** It needs independently
-negative fundamentals. Inverting the long screen surfaces strong companies in
-temporary pullbacks — the worst possible short.
-
 **Pivots are not knowable when they print.** `swing_points()` returns a
 `confirmed_at_bar` column; the backtest must filter on it rather than on the
 pivot's own bar index. Getting this wrong lets the screen see a swing low days
 before the market did and flatters every entry price in the run.
+
+**Risk and cash are different constraints.** `max_aggregate_open_risk_pct` caps
+what you can lose; `max_deployed_pct_of_capital` caps what you can spend. Six
+tight-stop positions can sit well inside the risk cap while asking for 150% of
+the account. Both gates have to fire independently.
+
+**Long only.** Shorts were dropped by decision — see SPEC.md section 4. There is
+no short screen and no short config, and neither should come back.
 
 ## Not in scope
 

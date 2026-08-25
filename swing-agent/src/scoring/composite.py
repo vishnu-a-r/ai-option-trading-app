@@ -6,7 +6,6 @@ from dataclasses import dataclass
 @dataclass
 class ScoredCandidate:
     symbol: str
-    side: str                 # 'long' | 'short'
     composite: float
     components: dict[str, float]
     entry: float

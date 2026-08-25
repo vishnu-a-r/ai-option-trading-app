@@ -66,4 +66,8 @@ class FuturesSource(Protocol):
         ...
 
     def contract_spec(self, symbols: Iterable[str], as_of: date) -> pd.DataFrame:
-        """Lot size and margin - required on every short signal."""
+        """Lot size and margin.
+
+        Not needed to place a trade - the system is long-only cash equity. Kept
+        because the futures layer reads contract metadata alongside OI.
+        """
