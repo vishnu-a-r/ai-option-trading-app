@@ -70,18 +70,74 @@ def confirmed_as_of(pivots: pd.DataFrame, bar: int) -> pd.DataFrame:
     return pivots[pivots["confirmed_at_bar"] <= bar]
 
 
+RESAMPLE_RULE = {"weekly": "W", "monthly": "ME"}
+
+
 def cpr(df: pd.DataFrame, timeframe: str = "weekly") -> pd.DataFrame:
     """Central Pivot Range: pivot, BC, TC.
 
     Timeframe must be weekly or monthly for swing use. Narrow CPR implies a
     trending expectation; wide implies range. Daily CPR is an intraday
-    construct and is not appropriate here.
+    construct and is not appropriate here, so "daily" is rejected rather than
+    quietly computed.
+
+    Each period's CPR is derived from the PRIOR period's H/L/C, which is what
+    makes it usable - this week's levels are known on Monday morning. The
+    returned frame is indexed by the period the levels apply TO, not the period
+    they were computed from.
     """
+    if timeframe not in RESAMPLE_RULE:
+        raise ValueError(
+            f"timeframe must be one of {sorted(RESAMPLE_RULE)}, got {timeframe!r}. "
+            f"Daily CPR is an intraday construct and is not valid for swing use."
+        )
+
+    rule = RESAMPLE_RULE[timeframe]
+    agg = df.resample(rule).agg({"high": "max", "low": "min", "close": "last"}).dropna()
+    if len(agg) < 2:
+        return pd.DataFrame(columns=["pivot", "bc", "tc", "width"])
+
+    prior = agg.shift(1).dropna()
+    pivot = (prior["high"] + prior["low"] + prior["close"]) / 3.0
+    bc = (prior["high"] + prior["low"]) / 2.0
+    tc = 2.0 * pivot - bc
+    # TC and BC are unordered by construction; the band is between them.
+    upper = pd.concat([bc, tc], axis=1).max(axis=1)
+    lower = pd.concat([bc, tc], axis=1).min(axis=1)
+    return pd.DataFrame(
+        {"pivot": pivot, "bc": lower, "tc": upper, "width": (upper - lower) / pivot},
+        index=prior.index,
+    )
 
 
-def support_resistance_levels(df: pd.DataFrame, lookback: int) -> list[float]:
-    """Prior pivot clusters.
+def support_resistance_levels(
+    df: pd.DataFrame, lookback: int, tolerance_pct: float = 1.0
+) -> list[float]:
+    """Prior pivot clusters, as sorted price levels.
 
     For the long screen these are overhead supply: the levels a pullback entry
     has to clear, and the natural places to set targets.
+
+    Pivots within `tolerance_pct` of each other are one level, averaged - three
+    rejections off the same price are one wall, not three, and counting them
+    separately would make a busy chart look like it has more structure than it
+    does. Only confirmed pivots are used, so this inherits the lookahead
+    guarantee from swing_points().
     """
+    if tolerance_pct <= 0:
+        raise ValueError(f"tolerance_pct must be > 0, got {tolerance_pct}")
+
+    pivots = swing_points(df, lookback)
+    if pivots.empty:
+        return []
+
+    levels: list[float] = []
+    cluster: list[float] = []
+    for price in sorted(pivots["price"].tolist()):
+        if cluster and (price - cluster[0]) / cluster[0] * 100.0 > tolerance_pct:
+            levels.append(sum(cluster) / len(cluster))
+            cluster = []
+        cluster.append(price)
+    if cluster:
+        levels.append(sum(cluster) / len(cluster))
+    return levels
