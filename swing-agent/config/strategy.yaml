@@ -1,0 +1,151 @@
+# All tunable strategy parameters. Logic lives in code, numbers live here.
+# Nothing in src/ should contain a hardcoded threshold.
+
+long_pullback:
+  trend:
+    price_above_sma: 50
+    sma_fast_above_slow: [50, 200]
+    require_higher_high_low: true
+    pivot_lookback: 5          # bars each side to qualify a swing pivot
+    min_swing_points: 2        # HH/HL pairs needed to call it an uptrend
+  momentum:
+    rsi_period: 14
+    rsi_min: 30
+    rsi_max: 60
+  confirmation:               # scored, not gating
+    stochastic: {k: 14, d: 3, smooth: 3, oversold: 20}
+    macd: {fast: 12, slow: 26, signal: 9}
+    volume_dryup_ratio: 0.7   # pullback vol vs 20d avg
+    volume_expansion_ratio: 1.5
+    anchored_vwap_from: last_swing_low
+    cpr_timeframe: weekly     # NOT daily - daily CPR is an intraday tool
+    relative_strength_periods: [21, 63]
+
+short_breakdown:
+  universe: fno_only          # cash equity cannot be held short overnight in India
+  trend:
+    price_below_sma: 50
+    sma_fast_below_slow: [50, 200]
+    require_lower_high_low: true
+  momentum:
+    rsi_period: 14
+    rsi_min: 40
+    rsi_max: 70               # bounced into resistance, not already collapsed
+  confirmation:
+    rejection_at: [prior_support_turned_resistance, declining_sma_20]
+
+fundamental:
+  long_gate:
+    # DELIBERATELY NULL - blocked on the data audit, not forgotten.
+    # These need a sector-adjusted calibration pass against the actual Nifty 500
+    # distribution. A plausible-looking number picked from general knowledge
+    # (ROCE > 15, D/E < 1) is worse than null: null fails loudly and stops the
+    # run, a guessed threshold silently filters the universe and every backtest
+    # number downstream inherits it without anyone knowing where it came from.
+    # Leave them null. Fill them from percentiles of the real distribution, per
+    # sector, and record which snapshot they were calibrated on.
+    min_roce: null
+    min_roe: null
+    max_debt_to_equity: null
+    min_ocf_to_pat: null      # earnings quality
+    max_promoter_pledge_pct: null
+    revenue_growth_3y_min: null
+  short_flag:
+    margin_trend: declining
+    debt_trend: rising
+    ocf_negative: true
+    pledge_increasing: true
+  sector_overrides:           # banking/NBFC metrics differ - do not apply one set
+    BANKING: {}
+    NBFC: {}
+
+institutional:
+  shareholding_qoq_lookback: 4
+  bulk_deal_lookback_days: 90
+  delivery_pct_vs_avg_days: 30
+
+futures:
+  oi_buildup_lookback: 5
+  rollover_window_days: 5
+
+scoring:
+  weights:                    # must sum to 1.0 - validated at load
+    technical_setup: 0.30
+    fundamental: 0.30
+    institutional: 0.20
+    futures_confirmation: 0.10
+    relative_strength: 0.10
+  top_n_long: 10
+  top_n_short: 5
+
+risk:
+  capital_inr: 200000
+
+  # SIZING ORDER OF OPERATIONS - do not reverse this.
+  #   1. structure sets the stop level (see atr_stop_buffer below)
+  #   2. rupee risk is FIXED at capital * risk_per_trade_pct / 100
+  #   3. quantity = risk_amount / abs(entry - stop)   <- size is the OUTPUT
+  # Never pick a position size first and derive risk from it. Two trades of
+  # equal conviction must carry equal rupee risk regardless of stop distance.
+  risk_per_trade_pct: 1.0     # = Rs 2,000 risk per trade at current capital
+
+  # There is NO fixed percentage stop. The stop is anchored just below the
+  # institutional stop cluster (below the pullback swing low for longs, above
+  # the rejection high for shorts), then pushed OUT by this ATR multiple so a
+  # routine stop sweep does not take the position out on a wick.
+  # A fixed 2% stop would sit inside one day's normal range for most Nifty 500
+  # midcaps - do not reintroduce one.
+  atr_period: 14
+  atr_stop_buffer: 0.5        # multiples of ATR beyond the structural anchor
+
+  # HARD CONCENTRATION CAP - overrides the sizing formula.
+  # A tight structural stop makes the formula ask for a large position. This
+  # cap binds first and truncates it, which means effective risk on tight-stop
+  # setups is below 1%. Intended, not a bug - log every time it binds.
+  max_position_pct_of_capital: 25
+
+  max_concurrent_positions: 6
+
+  # SECTOR CAP - stated in RISK, not exposure. This is the binding one.
+  # Rationale: everything else in this block is risk-denominated, and an
+  # exposure-only sector cap ranks the wrong things. A wide-stop name carries a
+  # full 1% risk at ~12% exposure; a tight-stop name truncated by the 25% cap
+  # carries well under 1% risk at 25% exposure. An exposure cap would wave the
+  # first pair through at 24% and block the second pair at 50% - backwards,
+  # since the first pair is the one that can actually lose 2% in a correlated
+  # gap. Momentum screens cluster hard by sector (three PSU banks or three
+  # defence names pulling back together on the same macro driver is the normal
+  # case, not the edge case), so the correlated-loss number is the one to cap.
+  max_sector_risk_pct: 2.0          # 2 full-risk positions per sector = 1/3 of the 6% budget
+
+  # Notional sanity bound only. Was 30, which was tight by accident rather than
+  # by intent: at typical stop distances a position lands near 15-20% of
+  # capital, so 30 blocked the second name in a sector roughly half the time
+  # while saying nothing about correlated risk. That forces 6 distinct sectors
+  # and makes the agent take the 4th-best signal in a weak sector over the
+  # 2nd-best in a leading one - which fights the sector rotation momentum feeds
+  # on. At 40 both caps agree on the same boundary (two names per sector) and
+  # whichever binds first is the right answer.
+  max_sector_exposure_pct: 40
+
+  # Both sector caps are unenforceable until each symbol carries a sector label,
+  # and the taxonomy LEVEL changes what the numbers mean. A broad
+  # "Financial Services" bucket lumps private banks, PSU banks, NBFCs, insurers
+  # and AMCs together - names that do not move together - and makes 40% loose.
+  # Sub-industry buckets make it bite constantly. Pin this before tuning either
+  # number; do not let the agent pick a taxonomy implicitly from whatever field
+  # the data source happens to return.
+  sector_taxonomy: null             # TODO choose: nse_macro | amfi | gics_sector | gics_sub_industry
+
+  # EXPOSURE IS DEFINED AS NOTIONAL, INCLUDING FOR SHORTS.
+  # Shorts are stock futures. Margin is ~15-20% of notional, so a margin-based
+  # definition would let one futures lot sit inside a 25% "position" while
+  # carrying 5x that in market exposure. Measure notional on both sides.
+  # Consequence worth seeing now rather than at signal time: at Rs 2,00,000
+  # capital a single stock futures lot is typically Rs 5-10 lakh notional, which
+  # breaches max_position_pct_of_capital on its own. The short side of this
+  # system is structurally unfundable at current capital - the screen should
+  # still run and report, but expect every short to be refused at this gate.
+
+  max_aggregate_open_risk_pct: 6    # 6 full-risk positions - refuse the 7th
+  time_stop_bars: 15                # setup went nowhere, free the capital

@@ -1,0 +1,13 @@
+source: nifty_500
+refresh: monthly              # index rebalances - never hardcode constituents
+
+exclusions:
+  surveillance: [ASM, GSM]
+  segments: [T2T]
+  circuit_locked: true
+  min_avg_traded_value_cr: 10 # 20-day average
+  min_price: null
+
+fno_universe:
+  source: nse_fno_list
+  refresh: monthly

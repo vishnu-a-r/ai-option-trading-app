@@ -1,0 +1,6 @@
+pandas
+numpy
+pyyaml
+requests
+pydantic
+pytest
