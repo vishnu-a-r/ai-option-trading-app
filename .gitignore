@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Cached market data - these endpoints rate-limit, but the cache is
+# machine-local and must never be committed
+data/cache/
+*.parquet
+
+# Generated daily output
+output/
