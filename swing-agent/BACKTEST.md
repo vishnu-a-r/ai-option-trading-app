@@ -1,30 +1,38 @@
 # Backtest results
 
 **Date:** 2026-08-25 · **Verdict: the strategy as specified does not work.**
-Run `python scripts/run_backtest.py` to reproduce.
+Run `python scripts/run_backtest.py` to reproduce. Transaction costs are modelled.
 
 ---
 
 ## Full Nifty 500 — the result that counts
 
-478 usable symbols (22 excluded by bar quality), 2020-06-01 → 2026-08-21, **646 trades**:
+478 usable symbols (22 excluded by bar quality), 2020-06-01 → 2026-08-21, **644 trades**:
 
 ```
-win rate               41.8%
-average R              -0.026
-max drawdown           53.7%
+win rate               39.6%
+average R (net)        -0.111
+  gross                -0.055
+  cost drag            0.057 R/trade
+max drawdown           59.1%
 longest losing streak  19
-exits                  stop=201, stop_gap=35, time_stop=410
+exits                  stop=199, stop_gap=36, time_stop=409
 
-  trending      trades=174   win=45.4%   avgR=-0.090
-  range_bound   trades=464   win=40.3%   avgR=-0.008
+  trending      trades=170   win=44.1%   avgR=-0.155
+  range_bound   trades=466   win=37.8%   avgR=-0.101
 ```
 
-**A 53.7% drawdown and a 19-trade losing streak are not survivable.** Not in the sense
-of ruin — position sizing caps that — but in the sense that no one keeps following a
-system through nineteen consecutive losers and half the account gone. The average R of
-−0.026 is roughly breakeven *before costs*, and costs are not modelled (see below), so
-the real figure is worse.
+**A 59.1% drawdown and a 19-trade losing streak are not survivable.** Not as ruin —
+position sizing caps that — but nobody keeps following a system through nineteen
+consecutive losers with the account more than halved.
+
+**Costs changed the verdict, not just the decimal.** The first version of this run
+modelled no costs and reported −0.026, which reads as "roughly breakeven, worth
+tuning". With costs it is −0.111: a system losing about a ninth of its risked amount
+on every trade. The drag of 0.057 R/trade landed at the top of the 0.02–0.06 estimate
+made before it was measured. Note gross also moved (−0.026 → −0.055), because slippage
+changes fill prices rather than being deducted afterwards, so it alters which trades
+happen and at what level.
 
 ## The regime conclusion did not survive
 
@@ -57,19 +65,23 @@ This cuts both ways and should not be used as an excuse. It means the test measu
 system's behaviour is currently governed by a parameter (`time_stop_bars: 15`) that was
 never calibrated against anything.
 
-## Not modelled — results are optimistic
+## Now modelled
 
-- **Transaction costs.** No brokerage, STT, stamp duty, exchange fees, or slippage.
-  Indian round-trip costs on delivery equity are on the order of 0.1–0.3% of position
-  value. Against a typical ~5% stop distance that is roughly 0.02–0.06 R per trade,
-  which on an average R of −0.026 is not a rounding error — it is the same size as the
-  result. **Adding costs would move this from "breakeven-ish" to "clearly losing".**
+- **Transaction costs** — brokerage, STT both legs, exchange and SEBI charges, stamp
+  duty on the buy, GST on fees, and the per-scrip DP charge on the sell. Itemised
+  rather than a flat percentage of turnover, because the DP charge is per scrip and
+  therefore falls hardest on small positions, which a percentage model would miss.
+  Rates are the common Indian discount-broker structure and should be replaced with
+  figures from an actual contract note.
+- **Slippage** — 0.05% each side, applied to the fill price rather than as a fee.
+
+## Still not modelled — results remain optimistic
+
 - **Survivorship bias.** Today's Nifty 500 applied across history excludes every name
   that fell out of the index. No point-in-time source found. Biases results *upward*.
 - **Liquidity and impact.** Fills are assumed at the open with no market impact.
 
-Every one of these makes the reported numbers better than reality, and none makes them
-worse.
+Both make the reported numbers better than reality, and neither makes them worse.
 
 ## What this does NOT say
 
@@ -83,7 +95,7 @@ fundamental layer, which carries 0.30 of the intended composite weight.
 
 ## Honest next steps
 
-1. **Add transaction costs** before any further tuning, so the baseline is real.
+1. ~~Add transaction costs.~~ ✅ Done — and they moved the verdict.
 2. **Do not tune thresholds against this number.** With 646 trades and no held-out
    period, anything found by searching parameters is overfitting. Any change needs
    walk-forward or out-of-sample validation.
