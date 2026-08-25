@@ -50,6 +50,17 @@ src/output/report.py     JSON + readable summary
 run_daily.py             orchestration
 ```
 
+## Backtest verdict
+
+**The strategy as specified does not work.** 646 trades over the full Nifty 500,
+2020-06 to 2026-08: 41.8% win rate, average R −0.026, **53.7% max drawdown**,
+19-trade losing streak — and transaction costs are not yet modelled, so the real
+figure is worse. See `BACKTEST.md`.
+
+Per SPEC §10, that means no live signals. Read `BACKTEST.md` before changing any
+threshold: with 646 trades and no held-out period, tuning against that number is
+overfitting, not improvement.
+
 ## Two things not to get wrong
 
 **Pivots are not knowable when they print.** `swing_points()` returns a
