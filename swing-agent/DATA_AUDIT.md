@@ -1,11 +1,15 @@
 # Data Availability Audit — SPEC §12
 
-**Date:** 2026-08-25 · **Status:** partial — blocked, see §5
+**Date:** 2026-08-25 · **Status:** substantially unblocked — see the update below
+**Updated:** 2026-08-25, after `*.nseindia.com` was added to the environment's egress allowlist.
 **Method:** live calls from the Claude Code session environment. Every row marked
 TESTED has a call behind it. Rows marked UNTESTED were not reached and are not guessed.
 
-> Read §5 first. Four of the five signal families in `scoring.weights` have no
-> confirmed source, so this is not a "mostly fine, some gaps" report.
+> **UPDATE — NSE access resolved.** The blocker named throughout this document was
+> the environment's egress policy, not NSE. With `*.nseindia.com` and `nseindia.com`
+> allowlisted, `nsearchives.nseindia.com` serves everything the audit said had no
+> substitute. Four findings below are now superseded and marked ✅ RESOLVED. The
+> fundamental layer (0.30 weight) is the one that remains genuinely blocked.
 
 ---
 
@@ -21,8 +25,10 @@ TESTED has a call behind it. Rows marked UNTESTED were not reached and are not g
 | Statements (revenue/PAT/OCF) | FMP `statements` | ❌ plan-denied | ACCESS DENIED |
 | Company profile + **sector** | FMP `profile-symbol` | ❌ plan-denied | ACCESS DENIED |
 | Universe construction | FMP `search-company-screener` | ❌ plan-denied | ACCESS DENIED — tool-level, Starter+ |
-| Nifty 500 constituents | `nsearchives.nseindia.com` | ❌ blocked | CONNECT 403 at the egress proxy |
-| NSE OHLCV / delivery % / F&O OI / rollover | `nseindia.com` | ❌ blocked | CONNECT 403 at the egress proxy |
+| Nifty 500 constituents + **sector labels** | `nsearchives.nseindia.com` | ✅ **RESOLVED** | `ind_nifty500list.csv`: 500 names, with an `Industry` column (20 values) |
+| NSE OHLCV + **delivery %** | `nsearchives.nseindia.com` | ✅ **RESOLVED** | `sec_bhavdata_full_DDMMYYYY.csv`: 2,633 EQ rows, `DELIV_PER` on 500/500 Nifty 500 names |
+| Stock futures OI, basis, lot size | `nsearchives.nseindia.com` | ✅ **RESOLVED** | `BhavCopy_NSE_FO_..._F_0000.csv.zip`: 208 stock-futures underlyings, `OpnIntrst`, `ChngInOpnIntrst`, `NewBrdLotQty` |
+| `www.nseindia.com` JSON API | `www.nseindia.com` | ⚠️ 403 | NSE bot protection, **not** the proxy — 0 proxy failures logged. Archives make it unnecessary |
 | Chartink scans | — | ⬜ UNTESTED | |
 | Screener.in | — | ⬜ UNTESTED | no official API; scraping ToS unreviewed |
 | BSE/NSE filings, transcripts | — | ⬜ UNTESTED | |
@@ -51,9 +57,8 @@ Dry-up and expansion are a matched pair in the confirmation layer. On a thin
 secondary feed the day-to-day variance is dominated by whether a handful of BSE
 participants happened to trade, not by the accumulation the signal is trying to read.
 
-**Verdict:** Alpha Vantage is usable for a price-only smoke test. It is not a
-foundation for this strategy. Anything volume-derived built on it will validate
-cleanly and mean nothing.
+**Verdict:** Alpha Vantage is superseded. NSE bhavcopy is the source for price and
+volume; nothing volume-derived should be built on a feed carrying 6% of the turnover.
 
 ---
 
@@ -101,16 +106,18 @@ Two consequences beyond the obvious:
 
 | Family | Weight | Source status |
 |---|---|---|
-| technical_setup | 0.30 | ⚠️ wrong exchange, volume unusable |
-| fundamental | 0.30 | ❌ none |
-| institutional | 0.20 | ❌ none |
-| futures_confirmation | 0.10 | ❌ none (and applies to only ~180 of 500 — see below) |
-| relative_strength | 0.10 | ⚠️ needs a Nifty 500 index series — untested |
+| technical_setup | 0.30 | ✅ NSE bhavcopy, correct exchange |
+| fundamental | 0.30 | ❌ **none — the remaining blocker** |
+| institutional | 0.20 | ⚠️ delivery % ✅; shareholding QoQ, bulk deals, FII/DII still untested |
+| futures_confirmation | 0.10 | ✅ F&O bhavcopy (applies to 208 of 500 — see below) |
+| relative_strength | 0.10 | ✅ index series derivable from the same archives |
 
-**70% of the composite has no source and the remaining 30% is on the wrong exchange.**
+~~**70% of the composite has no source and the remaining 30% is on the wrong exchange.**~~
+**Superseded.** With NSE access, 0.40 of the weight is fully sourced, 0.20 is partly
+sourced, and **0.30 (fundamental) is the one family still without any source.**
 
-A second scoring problem surfaced while planning against this table: only ~180 of the
-Nifty 500 have stock futures, so under a naive blend the other ~320 score zero on a
+A second scoring problem surfaced while planning against this table: only 208 of the
+Nifty 500 have stock futures (measured from the F&O bhavcopy, not estimated), so under a naive blend the other ~320 score zero on a
 0.10-weight family and can never rank as well as an equivalent F&O name. `rank()`
 renormalises over the families that apply instead, and records `families_used` —
 which matters acutely right now, since with no fundamental or institutional source
@@ -123,27 +130,30 @@ SPEC §12.1 is that the data foundation is not confirmed.
 
 ## 6. Answers to SPEC §12
 
-**1. Which sources can you actually reach?** See §1. In this environment: symbol
-resolution only. Note the NSE 403 is *this environment's egress policy*, not NSE
-refusing — the proxy log shows a policy denial at CONNECT, not an upstream failure.
-The same requests should work from a machine with open egress.
+**1. Which sources can you actually reach?** See §1. After allowlisting: the NSE
+archives, which cover price, volume, delivery, futures OI, lot size, index membership
+and sector labels. This was an egress-policy denial all along, exactly as the original
+version predicted — adding `*.nseindia.com` to the environment's **Custom** network
+access resolved it with no code change.
 
-**2. What would a paid subscription buy?** FMP Starter is the candidate: it unlocks
-statements, ratios, and `profile-symbol` (which also supplies the sector label the risk
-block needs). Worth a trial *before* paying, and the question to answer on that trial
+**2. What would a paid subscription buy?** Narrower than before. FMP Starter now buys
+**only** the fundamental layer — statements and ratios. It no longer needs to supply
+sector labels, because the Nifty 500 constituent CSV carries an `Industry` column. Worth a trial *before* paying, and the question to answer on that trial
 is not whether the endpoints respond — it is whether **Nifty 500 midcap** depth is
 there. Vendor India coverage is typically solid for the top 100 and thins out below,
 and the midcaps are where this screen lives.
 
 What no subscription substitutes for: **delivery percentage, stock-futures OI, basis,
-and rollover are NSE-published and have no vendor equivalent.** SPEC §6 and §7 —
-30% of the composite — depend on NSE access specifically. This is the access to fix
-first; it is also free.
+and rollover are NSE-published and have no vendor equivalent.** ✅ Now available free
+from the archives.
 
 **3. Ambiguous or unimplementable as written?** Three, all recorded in
 `config/strategy.yaml`:
 - Sector caps need a taxonomy pinned before either number means anything
-  (`risk.sector_taxonomy`, currently `null`).
+  (`risk.sector_taxonomy`, still `null`). ✅ **Now answerable**: the constituent CSV
+  carries an `Industry` column with 20 values. Note Financial Services is 101 of 500 —
+  a fifth of the index in one bucket, which makes a 40% exposure cap on it loose. This
+  is a strategy decision, so the null stays until it is made deliberately.
 - The short side was **dropped by decision** after this audit (SPEC §4). It was also
   structurally unfundable: at ₹2,00,000 capital a single stock-futures lot breaches
   `max_position_pct_of_capital` on its own. Long-only removes that problem and
@@ -157,12 +167,13 @@ first; it is also free.
 **4. Proposed order.** Unchanged from the README, except that source-independent work
 moves ahead of blocked work rather than the build stalling:
 
-1. Resolve NSE access (egress allowlist, or run the data layer locally and commit cached
-   bhavcopy). ← the actual blocker
-2. FMP Starter trial, checking midcap depth specifically.
-3. Meanwhile: indicators, which are pure functions and need no live source. Started
-   in this branch — `src/data/quality.py` and `pivots.swing_points()`, 50 tests.
-4. Then the build order as written.
+1. ~~Resolve NSE access.~~ ✅ **Done** — environment network access set to Custom with
+   `*.nseindia.com`.
+2. Build `NsePriceSource` against the archives, behind the existing `PriceSource`
+   Protocol. ← the next actual step
+3. FMP Starter trial, checking midcap depth specifically. Now the only paid question.
+4. ~~Meanwhile: indicators.~~ ✅ Done — the whole source-independent layer, 191 tests.
+5. Then the build order as written: backtest, runner, report.
 
 ---
 
@@ -186,8 +197,7 @@ moves ahead of blocked work rather than the build stalling:
 
 - Chartink, Screener.in, BSE/NSE filings, shareholding, bulk deals, FII/DII — untested,
   and untested is not the same as unavailable.
-- The BSE-vs-NSE volume ratio is asserted from general knowledge, not measured, because
-  NSE is unreachable from here. Worth measuring once access exists.
+- ~~The BSE-vs-NSE volume ratio is asserted, not measured.~~ ✅ Measured: 15.9× (§2).
 - Corporate actions. `quality.py` cannot detect a split or bonus — it looks like a
   legitimate gap with healthy volume. Use an adjusted series.
 - Survivorship bias (SPEC §10). Needs point-in-time Nifty 500 membership; no source
