@@ -41,9 +41,39 @@ fundamental:
     min_ocf_to_pat: null      # earnings quality
     max_promoter_pledge_pct: null
     revenue_growth_3y_min: null
-  sector_overrides:           # banking/NBFC metrics differ - do not apply one set
-    BANKING: {}
-    NBFC: {}
+  # SECTOR OVERRIDES. These are not "the same metrics with different numbers".
+  # For a lender the generic metric SET is wrong, not just its thresholds:
+  #
+  #   debt-to-equity  - meaningless for a bank. Leverage is the business model,
+  #                     not a warning sign. A bank at D/E 10 is normal; a
+  #                     manufacturer at D/E 10 is in trouble.
+  #   ROCE            - not the right capital metric for a lender. Return on
+  #                     assets and return on equity are.
+  #   OCF-to-PAT      - operating cash flow for a lender swings with the loan
+  #                     book, so it does not measure earnings quality the way
+  #                     it does for a manufacturer.
+  #
+  # So an override declares which generic metrics DO NOT APPLY and which
+  # sector-specific ones replace them. Applying one threshold set across all
+  # sectors is the error SPEC section 5 explicitly warns about.
+  #
+  # Values stay null pending calibration against the real distribution, for the
+  # same reason long_gate does.
+  sector_overrides:
+    BANKING:
+      exclude: [max_debt_to_equity, min_roce, min_ocf_to_pat]
+      thresholds:
+        min_roa: null                 # return on assets
+        min_net_interest_margin: null
+        max_gross_npa_pct: null       # asset quality
+        min_capital_adequacy_pct: null
+    NBFC:
+      exclude: [min_roce, min_ocf_to_pat]
+      thresholds:
+        min_roa: null
+        max_gross_npa_pct: null
+        min_capital_adequacy_pct: null
+        max_debt_to_equity: null      # applies, but at a far higher level
 
 data_quality:
   # Runs between the data layer and the indicators. See src/data/quality.py for

@@ -189,6 +189,21 @@ moves ahead of blocked work rather than the build stalling:
    Protocol. ← the next actual step
 3. FMP Starter trial, checking midcap depth specifically. Now the only paid question,
    and the only route to the fundamental layer that has not been ruled out by testing.
+
+   **Re-tested 2026-08-25 after the decision to trial: still plan-denied.** Starting the
+   trial is an account action on financialmodelingprep.com and cannot be done from here.
+   The scoring layer is now built against the `FundamentalSource` protocol and waits on
+   an adapter — deliberately not written blind, since no FMP response for an Indian
+   ticker has ever been seen and guessing at field names is how a mapping layer ends up
+   silently wrong.
+
+   **What the trial must actually answer**, beyond "do the endpoints respond":
+   - Nifty 500 **midcap** depth — coverage thins below the top 100, and midcaps are
+     where this screen lives
+   - Whether `.NS` symbols resolve for statements, not just for `search-symbol`
+   - Whether lender-specific fields exist at all (GNPA, CAR, NIM). Without them the
+     BANKING and NBFC overrides cannot be calibrated, and Financial Services is 101 of
+     the 500
 4. ~~Meanwhile: indicators.~~ ✅ Done — the whole source-independent layer, 191 tests.
 5. Then the build order as written: backtest, runner, report.
 
