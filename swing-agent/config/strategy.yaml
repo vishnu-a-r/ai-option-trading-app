@@ -153,4 +153,18 @@ risk:
   max_deployed_pct_of_capital: 100
 
   max_aggregate_open_risk_pct: 6    # 6 full-risk positions - refuse the 7th
+  # EXITS. SPEC section 9 names three - initial target, trailing logic, and a
+  # time stop. Only the time stop is set. The other two are null rather than
+  # guessed, for the same reason the long_gate thresholds are: a target
+  # multiple picked to make a backtest look good is a fitted parameter wearing
+  # a strategy's clothes, and every number downstream inherits it.
+  #
+  # CONSEQUENCE FOR THE BACKTEST, and it is not neutral: with no target and no
+  # trail, a position exits only on the stop or after time_stop_bars. That
+  # measures what the setup does in fifteen bars, unmanaged. It gives winners
+  # back when they run, so it likely UNDERSTATES a system that would take
+  # profit. Read the reported numbers as a floor for the setup, not as the
+  # performance of a finished strategy.
+  target_r_multiple: null           # TODO e.g. 2.0 = exit at 2x the risked amount
+  trailing: null                    # TODO e.g. {after_r: 1.0, method: swing_low}
   time_stop_bars: 15                # setup went nowhere, free the capital
