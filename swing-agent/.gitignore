@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.cache/
+data/cache/bhavcopy/
+data/cache/fo/
+data/cache/index/

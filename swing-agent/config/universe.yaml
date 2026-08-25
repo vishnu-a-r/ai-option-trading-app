@@ -1,0 +1,42 @@
+source: nifty_500
+refresh: monthly              # index rebalances - never hardcode constituents
+
+exclusions:
+  surveillance: [ASM, GSM]
+  segments: [T2T]
+  circuit_locked: true
+  min_avg_traded_value_cr: 10 # 20-day average
+  min_price: null
+
+fno_universe:
+  # NOT a universe filter. The system is long-only (SPEC.md section 4), so the
+  # full Nifty 500 is tradeable. This list only marks where futures confirmation
+  # is AVAILABLE - roughly 180 of the 500. Names outside it are scored on the
+  # families that do apply, with weights renormalised; they are not penalised
+  # for lacking a futures signal.
+  source: nse_fno_list
+  refresh: monthly
+
+sector_universe:
+  # WHY THIS EXISTS. Sector buckets in the Nifty 500 are wildly uneven -
+  # Financial Services is 101 of the 500, a fifth of the index, against 11 for
+  # the smallest. Screening every name means the big buckets dominate the
+  # shortlist by sheer count rather than by quality, and no downstream sector
+  # cap fixes that: max_sector_risk_pct limits what you HOLD, it does not stop
+  # a sector from crowding out the ranking before you get there.
+  #
+  # So the universe is capped per sector, and the ranking metric is stated
+  # rather than implied.
+  rank_by: avg_traded_value      # 20-day average, from the bhavcopy
+  avg_days: 20
+
+  # NOT a quality ranking. Liquidity is what the data supports today; there is
+  # no fundamental source (DATA_AUDIT.md section 4). When fundamentals land,
+  # rank_by should change to a fundamental score and this comment should go.
+  max_names_per_sector: null     # null = no cap for sectors not listed below
+  overrides:
+    Financial Services: 15
+
+  # Names excluded from a sector's universe by symbol prefix, before ranking.
+  exclude_prefixes:
+    Financial Services: [HDFC, ICICI]

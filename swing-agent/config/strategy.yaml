@@ -1,0 +1,261 @@
+# All tunable strategy parameters. Logic lives in code, numbers live here.
+# Nothing in src/ should contain a hardcoded threshold.
+#
+# LONG ONLY. The short side was dropped by decision - see SPEC.md section 4.
+# There is no short_breakdown block, no short_flag, and no top_n_short, and
+# nothing here should grow one back. Every position is cash equity, held long.
+
+long_pullback:
+  trend:
+    price_above_sma: 50
+    sma_fast_above_slow: [50, 200]
+    require_higher_high_low: true
+    pivot_lookback: 5          # bars each side to qualify a swing pivot
+    min_swing_points: 2        # HH/HL pairs needed to call it an uptrend
+  momentum:
+    rsi_period: 14
+    rsi_min: 30
+    rsi_max: 60
+  confirmation:               # scored, not gating
+    stochastic: {k: 14, d: 3, smooth: 3, oversold: 20}
+    macd: {fast: 12, slow: 26, signal: 9}
+    volume_dryup_ratio: 0.7   # pullback vol vs 20d avg
+    volume_expansion_ratio: 1.5
+    anchored_vwap_from: last_swing_low
+    cpr_timeframe: weekly     # NOT daily - daily CPR is an intraday tool
+    relative_strength_periods: [21, 63]
+
+fundamental:
+  long_gate:
+    # DELIBERATELY NULL - blocked on the data audit, not forgotten.
+    # These need a sector-adjusted calibration pass against the actual Nifty 500
+    # distribution. A plausible-looking number picked from general knowledge
+    # (ROCE > 15, D/E < 1) is worse than null: null fails loudly and stops the
+    # run, a guessed threshold silently filters the universe and every backtest
+    # number downstream inherits it without anyone knowing where it came from.
+    # Leave them null. Fill them from percentiles of the real distribution, per
+    # sector, and record which snapshot they were calibrated on.
+    min_roce: null
+    min_roe: null
+    max_debt_to_equity: null
+    min_ocf_to_pat: null      # earnings quality
+    max_promoter_pledge_pct: null
+    revenue_growth_3y_min: null
+  # SECTOR OVERRIDES. These are not "the same metrics with different numbers".
+  # For a lender the generic metric SET is wrong, not just its thresholds:
+  #
+  #   debt-to-equity  - meaningless for a bank. Leverage is the business model,
+  #                     not a warning sign. A bank at D/E 10 is normal; a
+  #                     manufacturer at D/E 10 is in trouble.
+  #   ROCE            - not the right capital metric for a lender. Return on
+  #                     assets and return on equity are.
+  #   OCF-to-PAT      - operating cash flow for a lender swings with the loan
+  #                     book, so it does not measure earnings quality the way
+  #                     it does for a manufacturer.
+  #
+  # So an override declares which generic metrics DO NOT APPLY and which
+  # sector-specific ones replace them. Applying one threshold set across all
+  # sectors is the error SPEC section 5 explicitly warns about.
+  #
+  # Values stay null pending calibration against the real distribution, for the
+  # same reason long_gate does.
+  sector_overrides:
+    BANKING:
+      exclude: [max_debt_to_equity, min_roce, min_ocf_to_pat]
+      thresholds:
+        min_roa: null                 # return on assets
+        min_net_interest_margin: null
+        max_gross_npa_pct: null       # asset quality
+        min_capital_adequacy_pct: null
+    NBFC:
+      exclude: [min_roce, min_ocf_to_pat]
+      thresholds:
+        min_roa: null
+        max_gross_npa_pct: null
+        min_capital_adequacy_pct: null
+        max_debt_to_equity: null      # applies, but at a far higher level
+
+data_quality:
+  # Runs between the data layer and the indicators. See src/data/quality.py for
+  # why - a single zero-volume carried-forward bar (confirmed present in the
+  # audit) sets True Range to 0, drags ATR down, and ATR is what the stop
+  # buffer multiplies and the stop is what sizes the position.
+  drop_zero_volume_bars: true
+  drop_flat_bars: true          # high == low: TR 0, and it is both a swing high and a swing low
+  max_stale_bar_pct: 5          # above this the SYMBOL is excluded, not cleaned and screened anyway
+  min_bars_required: 250        # 200 SMA needs 200 clean bars; leave headroom for the pullback window
+
+  corporate_actions:
+    # NSE bhavcopy is UNADJUSTED. 105 of the Nifty 500 - 21% - carry at least
+    # one split or bonus in the cached window, and an unadjusted 1:1 bonus looks
+    # exactly like a 50% crash to every indicator downstream.
+    ratio_lower: 0.60           # a session ratio at or below this is suspect
+    ratio_upper: 1.80           # ...or at or above this
+    # How far the observed ratio may sit from a clean fraction and still be
+    # treated as a split. The stock moves on the ex-date too, so 1:1 bonuses
+    # land near 0.50 rather than on it - RELIANCE printed 0.502. Too tight and
+    # real splits are missed; too loose and a genuine crash gets "adjusted"
+    # into a continuous-looking series that is wrong.
+    clean_ratio_tolerance_pct: 6
+    # Kept at 6 deliberately, knowing it refuses ~8 symbols whose ratio clusters
+    # near 0.22 - IRCTC, AFFLE, KPRMILL and others. Those are almost certainly
+    # 1:5 splits where the stock also moved ~10% on the ex-date, and widening
+    # the tolerance to about 12 would capture them. It would also start matching
+    # genuine crashes, and the cost is asymmetric: refusing a real symbol loses
+    # one name from a 500-name universe, while adjusting a real crash invents a
+    # continuous price series that no downstream check can detect. Refuse.
+    # A ratio measured across a hole in the series is not a corporate action.
+    # The EQ-series filter drops a stock while it sits in the BE/trade-for-trade
+    # segment under surveillance, so CGPOWER has no bars for four months and
+    # TTML none for five. Comparing the prices either side produced phantom
+    # 2-3x "splits". More than this many calendar days between consecutive bars
+    # and the event is a data gap, and the symbol is refused rather than
+    # adjusted.
+    max_gap_days: 10
+    # A symbol whose event matches no clean fraction is REFUSED, not adjusted.
+    # Demergers are the usual cause: value leaves for a new entity and no single
+    # factor reconstructs the series. An almost-right factor is worse than an
+    # obviously broken one because it hides.
+    refuse_unmatched: true
+
+institutional:
+  shareholding_qoq_lookback: 4
+  bulk_deal_lookback_days: 90
+  delivery_pct_vs_avg_days: 30
+
+futures:
+  oi_buildup_lookback: 5
+  rollover_window_days: 5
+
+costs:
+  # Transaction costs for DELIVERY EQUITY, long-only cash. Without these the
+  # backtest is not merely imprecise, it is wrong in a specific direction:
+  # every omitted cost flatters the result, and on a typical 5% stop distance
+  # a round trip is roughly 0.02-0.06 R - the same order as the entire measured
+  # edge. See BACKTEST.md.
+  #
+  # THESE ARE DEFAULTS, NOT YOUR RATES. They reflect the common Indian
+  # discount-broker structure as of 2026-08. Brokerage varies by broker,
+  # statutory rates change with regulation, and DP charges differ by depository
+  # participant. Replace them with figures from your own contract note before
+  # trusting any number derived from them.
+  brokerage_pct: 0.0            # many discount brokers charge nothing on delivery
+  brokerage_flat_inr: 0.0       # ...others charge a flat fee per executed order
+  stt_buy_pct: 0.1              # securities transaction tax, delivery, buy side
+  stt_sell_pct: 0.1             # and sell side
+  exchange_txn_pct: 0.00325     # NSE transaction charge, each side
+  sebi_turnover_pct: 0.0001     # each side
+  stamp_duty_buy_pct: 0.015     # buy side only
+  gst_pct: 18.0                 # on brokerage + exchange + SEBI charges
+  dp_charge_sell_inr: 15.93     # per scrip on sell, regardless of quantity
+
+  # Slippage is NOT a fee - it is the gap between the modelled fill and the
+  # real one, applied to the price itself on both sides. Modelled separately
+  # because it scales with liquidity and order size while the fees above do not.
+  # A small-cap at the open will not fill where a large-cap does.
+  slippage_pct: 0.05            # each side
+
+scoring:
+  weights:                    # must sum to 1.0 - validated at load
+    technical_setup: 0.30
+    fundamental: 0.30
+    institutional: 0.20
+    futures_confirmation: 0.10
+    relative_strength: 0.10
+  top_n_long: 10
+
+risk:
+  capital_inr: 200000
+
+  # SIZING ORDER OF OPERATIONS - do not reverse this.
+  #   1. structure sets the stop level (see atr_stop_buffer below)
+  #   2. rupee risk is FIXED at capital * risk_per_trade_pct / 100
+  #   3. quantity = risk_amount / abs(entry - stop)   <- size is the OUTPUT
+  # Never pick a position size first and derive risk from it. Two trades of
+  # equal conviction must carry equal rupee risk regardless of stop distance.
+  risk_per_trade_pct: 1.0     # = Rs 2,000 risk per trade at current capital
+
+  # There is NO fixed percentage stop. The stop is anchored just below the
+  # institutional stop cluster (below the pullback swing low), then pushed OUT
+  # by this ATR multiple so a
+  # routine stop sweep does not take the position out on a wick.
+  # A fixed 2% stop would sit inside one day's normal range for most Nifty 500
+  # midcaps - do not reintroduce one.
+  atr_period: 14
+  atr_stop_buffer: 0.5        # multiples of ATR beyond the structural anchor
+
+  # HARD CONCENTRATION CAP - overrides the sizing formula.
+  # A tight structural stop makes the formula ask for a large position. This
+  # cap binds first and truncates it, which means effective risk on tight-stop
+  # setups is below 1%. Intended, not a bug - log every time it binds.
+  max_position_pct_of_capital: 25
+
+  max_concurrent_positions: 6
+
+  # SECTOR CAP - stated in RISK, not exposure. This is the binding one.
+  # Rationale: everything else in this block is risk-denominated, and an
+  # exposure-only sector cap ranks the wrong things. A wide-stop name carries a
+  # full 1% risk at ~12% exposure; a tight-stop name truncated by the 25% cap
+  # carries well under 1% risk at 25% exposure. An exposure cap would wave the
+  # first pair through at 24% and block the second pair at 50% - backwards,
+  # since the first pair is the one that can actually lose 2% in a correlated
+  # gap. Momentum screens cluster hard by sector (three PSU banks or three
+  # defence names pulling back together on the same macro driver is the normal
+  # case, not the edge case), so the correlated-loss number is the one to cap.
+  max_sector_risk_pct: 2.0          # 2 full-risk positions per sector = 1/3 of the 6% budget
+
+  # Notional sanity bound only. Was 30, which was tight by accident rather than
+  # by intent: at typical stop distances a position lands near 15-20% of
+  # capital, so 30 blocked the second name in a sector roughly half the time
+  # while saying nothing about correlated risk. That forces 6 distinct sectors
+  # and makes the agent take the 4th-best signal in a weak sector over the
+  # 2nd-best in a leading one - which fights the sector rotation momentum feeds
+  # on. At 40 both caps agree on the same boundary (two names per sector) and
+  # whichever binds first is the right answer.
+  max_sector_exposure_pct: 40
+
+  # PINNED to the Industry column of NSE's own Nifty 500 constituent CSV -
+  # 20 buckets, and the only taxonomy actually in the data. Chosen because no
+  # other source was available, not because it is the ideal granularity.
+  #
+  # Know its weakness: "Financial Services" is one bucket holding 101 of the
+  # 500 - private banks, PSU banks, NBFCs, insurers, AMCs and exchanges, names
+  # that do not move together. A 40% exposure cap on that bucket is loose, and
+  # a sub-industry split would make it bite properly. The universe cap in
+  # universe.yaml is the partial answer: it stops the bucket dominating the
+  # RANKING. It does not make the exposure cap tighter.
+  #
+  # If a finer taxonomy ever becomes available, this is the key to change and
+  # max_sector_exposure_pct should be revisited at the same time.
+  sector_taxonomy: nse_industry
+
+  # CASH DEPLOYMENT CAP.
+  # Exposure is simply qty * price now that everything is a cash-equity long.
+  # This cap exists because the other numbers do not add up on their own:
+  # max_concurrent_positions * max_position_pct_of_capital = 6 * 25 = 150% of
+  # capital, which cannot be funded. The aggregate RISK cap does not catch it
+  # either - six tight-stop positions truncated to 25% exposure each carry
+  # roughly 0.5% risk apiece, about 3% aggregate, comfortably inside the 6%
+  # limit while demanding 150% of the account. Risk and cash are different
+  # constraints and both have to be stated.
+  # Refuse the position that would overdraw. Do not silently size it down:
+  # a position sized by anything other than the formula above breaks the
+  # equal-rupee-risk invariant that the whole block exists to protect.
+  max_deployed_pct_of_capital: 100
+
+  max_aggregate_open_risk_pct: 6    # 6 full-risk positions - refuse the 7th
+  # EXITS. SPEC section 9 names three - initial target, trailing logic, and a
+  # time stop. Only the time stop is set. The other two are null rather than
+  # guessed, for the same reason the long_gate thresholds are: a target
+  # multiple picked to make a backtest look good is a fitted parameter wearing
+  # a strategy's clothes, and every number downstream inherits it.
+  #
+  # CONSEQUENCE FOR THE BACKTEST, and it is not neutral: with no target and no
+  # trail, a position exits only on the stop or after time_stop_bars. That
+  # measures what the setup does in fifteen bars, unmanaged. It gives winners
+  # back when they run, so it likely UNDERSTATES a system that would take
+  # profit. Read the reported numbers as a floor for the setup, not as the
+  # performance of a finished strategy.
+  target_r_multiple: null           # TODO e.g. 2.0 = exit at 2x the risked amount
+  trailing: null                    # TODO e.g. {after_r: 1.0, method: swing_low}
+  time_stop_bars: 15                # setup went nowhere, free the capital
