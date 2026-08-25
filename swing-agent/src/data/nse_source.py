@@ -344,11 +344,29 @@ class NseFuturesSource:
         Rising price with rising OI is a long buildup; falling price with rising
         OI is a short buildup. Falling OI is unwinding either way. This is the
         futures confirmation SPEC section 7 asks for.
+
+        SUPPRESSED IN THE ROLLOVER WINDOW, and this is not a nicety. Observed on
+        RELIANCE into the 2026-08-25 expiry: open interest fell from 104.5m to
+        48.4m over six sessions, a 54% collapse, while the close went 1316.0 ->
+        1316.0. That change in OI is contracts migrating to the next expiry, not
+        anybody's view on the stock, yet the naive rule reads price-up-OI-down
+        and reports "short_covering" every day of it. Eleven-to-fifteen days out
+        the same series moves 0.5-1m a day and means something.
+
+        Returns None inside futures.rollover_window_days of expiry, which is the
+        same answer as "no futures data" - correct, because in both cases there
+        is no usable futures signal and rank() should renormalise this family
+        away rather than score it.
         """
         try:
             row = self._fo.loc[(symbol, pd.Timestamp(as_of))]
         except KeyError:
             return None
+
+        window = self.cfg["futures"]["rollover_window_days"]
+        if (row["expiry"].date() - as_of).days <= window:
+            return None
+
         oi_up = float(row["oi_change"]) > 0
         if price_change > 0:
             return "long_buildup" if oi_up else "short_covering"

@@ -303,9 +303,40 @@ class TestNseFuturesSource:
         from src.data.nse_source import NseFuturesSource
         f = fo_frame.copy()
         f.loc[("RELIANCE", pd.Timestamp("2026-08-21")), "oi_change"] = oi_change
+        # Move the trade date well clear of expiry; inside the rollover window
+        # the classification is suppressed - see the rollover tests below.
+        f = f.rename(index={pd.Timestamp("2026-08-21"): pd.Timestamp("2026-08-05")})
         assert NseFuturesSource(cfg, frame=f).oi_buildup(
-            "RELIANCE", date(2026, 8, 21), price_change
+            "RELIANCE", date(2026, 8, 5), price_change
         ) == expected
+
+    def test_buildup_is_suppressed_inside_the_rollover_window(self, cfg, fo_frame):
+        """OI collapse near expiry is contracts migrating, not a view.
+
+        RELIANCE into 2026-08-25 lost 54% of its open interest over six
+        sessions while the close was unchanged. The naive rule calls that
+        short_covering every day.
+        """
+        from src.data.nse_source import NseFuturesSource
+        # 2026-08-21 is 4 days from the 08-25 expiry, inside the 5-day window.
+        assert NseFuturesSource(cfg, frame=fo_frame).oi_buildup(
+            "RELIANCE", date(2026, 8, 21), price_change=2.8
+        ) is None
+
+    def test_buildup_is_reported_well_clear_of_expiry(self, cfg, fo_frame):
+        from src.data.nse_source import NseFuturesSource
+        f = fo_frame.rename(index={pd.Timestamp("2026-08-21"): pd.Timestamp("2026-08-05")})
+        assert NseFuturesSource(cfg, frame=f).oi_buildup(
+            "RELIANCE", date(2026, 8, 5), price_change=2.8
+        ) is not None
+
+    def test_the_window_comes_from_config_not_a_literal(self, cfg, fo_frame):
+        from src.data.nse_source import NseFuturesSource
+        wide = {**cfg, "futures": {**cfg["futures"], "rollover_window_days": 30}}
+        f = fo_frame.rename(index={pd.Timestamp("2026-08-21"): pd.Timestamp("2026-08-05")})
+        assert NseFuturesSource(wide, frame=f).oi_buildup(
+            "RELIANCE", date(2026, 8, 5), 2.8
+        ) is None
 
     def test_unknown_symbol_has_no_buildup(self, cfg, fo_frame):
         from src.data.nse_source import NseFuturesSource
