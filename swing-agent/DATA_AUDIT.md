@@ -29,6 +29,9 @@ TESTED has a call behind it. Rows marked UNTESTED were not reached and are not g
 | NSE OHLCV + **delivery %** | `nsearchives.nseindia.com` | ✅ **RESOLVED** | `sec_bhavdata_full_DDMMYYYY.csv`: 2,633 EQ rows, `DELIV_PER` on 500/500 Nifty 500 names |
 | Stock futures OI, basis, lot size | `nsearchives.nseindia.com` | ✅ **RESOLVED** | `BhavCopy_NSE_FO_..._F_0000.csv.zip`: 208 stock-futures underlyings, `OpnIntrst`, `ChngInOpnIntrst`, `NewBrdLotQty` |
 | `www.nseindia.com` JSON API | `www.nseindia.com` | ⚠️ 403 | NSE bot protection, **not** the proxy — 0 proxy failures logged. Archives make it unnecessary |
+| **Nifty 500 index closes** (RS benchmark) | `nsearchives.nseindia.com` | ✅ **RESOLVED** | `ind_close_all_DDMMYYYY.csv`: 165 indices with OHLC, plus index-level P/E, P/B, dividend yield |
+| **Per-stock fundamentals** | Alpha Vantage | ❌ **none** | `COMPANY_OVERVIEW` and `INCOME_STATEMENT` both return `{}` for `RELIANCE.BSE` — same empty signature as the price endpoint for `.NSE` |
+| Per-stock fundamentals | NSE archives | ❌ none | Probed `Fin_Results_*`, `shareholding_pattern`, `ind_nifty500_Index_Ratios` — all 404. The archive publishes market data, not financials |
 | Chartink scans | — | ⬜ UNTESTED | |
 | Screener.in | — | ⬜ UNTESTED | no official API; scraping ToS unreviewed |
 | BSE/NSE filings, transcripts | — | ⬜ UNTESTED | |
@@ -110,7 +113,7 @@ Two consequences beyond the obvious:
 | fundamental | 0.30 | ❌ **none — the remaining blocker** |
 | institutional | 0.20 | ⚠️ delivery % ✅; shareholding QoQ, bulk deals, FII/DII still untested |
 | futures_confirmation | 0.10 | ✅ F&O bhavcopy (applies to 208 of 500 — see below) |
-| relative_strength | 0.10 | ✅ index series derivable from the same archives |
+| relative_strength | 0.10 | ✅ `ind_close_all_*.csv` carries Nifty 500 and sectoral index closes |
 
 ~~**70% of the composite has no source and the remaining 30% is on the wrong exchange.**~~
 **Superseded.** With NSE access, 0.40 of the weight is fully sourced, 0.20 is partly
@@ -136,9 +139,22 @@ and sector labels. This was an egress-policy denial all along, exactly as the or
 version predicted — adding `*.nseindia.com` to the environment's **Custom** network
 access resolved it with no code change.
 
-**2. What would a paid subscription buy?** Narrower than before. FMP Starter now buys
-**only** the fundamental layer — statements and ratios. It no longer needs to supply
-sector labels, because the Nifty 500 constituent CSV carries an `Industry` column. Worth a trial *before* paying, and the question to answer on that trial
+**2. What would a paid subscription buy?** Narrower than before, and now the ONLY
+remaining paid question. FMP Starter buys **only** the fundamental layer — statements
+and ratios. It no longer needs to supply sector labels, because the Nifty 500
+constituent CSV carries an `Industry` column.
+
+**Three sources tested for per-stock fundamentals, all negative:**
+
+| Source | Result |
+|---|---|
+| FMP (current plan) | `statements`, `key-metrics`, `profile-symbol` all plan-denied |
+| Alpha Vantage | `COMPANY_OVERVIEW` and `INCOME_STATEMENT` return `{}` for `RELIANCE.BSE` |
+| NSE archives | No financials published — market data only; probed paths 404 |
+
+This is now a tested conclusion rather than an assumption about one vendor. Index-level
+P/E and P/B are available from `ind_close_all_*.csv`, but those describe the index, not
+a company, and cannot gate a stock. Worth a trial *before* paying, and the question to answer on that trial
 is not whether the endpoints respond — it is whether **Nifty 500 midcap** depth is
 there. Vendor India coverage is typically solid for the top 100 and thins out below,
 and the midcaps are where this screen lives.
@@ -171,7 +187,8 @@ moves ahead of blocked work rather than the build stalling:
    `*.nseindia.com`.
 2. Build `NsePriceSource` against the archives, behind the existing `PriceSource`
    Protocol. ← the next actual step
-3. FMP Starter trial, checking midcap depth specifically. Now the only paid question.
+3. FMP Starter trial, checking midcap depth specifically. Now the only paid question,
+   and the only route to the fundamental layer that has not been ruled out by testing.
 4. ~~Meanwhile: indicators.~~ ✅ Done — the whole source-independent layer, 191 tests.
 5. Then the build order as written: backtest, runner, report.
 

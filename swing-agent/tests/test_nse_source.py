@@ -366,7 +366,7 @@ class TestSectorShortlist:
             NseUniverse(), "Financial Services", load_cache(), date(2026, 8, 21), ucfg
         )
         assert prov["sector_members"] == 101
-        assert len(syms) == 10
+        assert len(syms) == 15
 
     def test_hdfc_and_icici_are_removed_before_ranking(self, ucfg):
         from src.data.nse_source import NseUniverse, load_cache, sector_shortlist

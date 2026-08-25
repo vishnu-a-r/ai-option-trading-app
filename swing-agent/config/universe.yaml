@@ -35,7 +35,7 @@ sector_universe:
   # rank_by should change to a fundamental score and this comment should go.
   max_names_per_sector: null     # null = no cap for sectors not listed below
   overrides:
-    Financial Services: 10
+    Financial Services: 15
 
   # Names excluded from a sector's universe by symbol prefix, before ranking.
   exclude_prefixes:
