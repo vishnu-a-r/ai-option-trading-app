@@ -113,6 +113,53 @@ class TestNsePriceSource:
         assert not src.reports["RELIANCE"].usable
 
 
+class TestStaleFileTrap:
+    """NSE answers some non-trading stamps with the PREVIOUS day's file.
+
+    A 200, a valid SYMBOL header, and the wrong data. Fifty of the first 260
+    days pulled were silent duplicates. Only DATE1 distinguishes them, and two
+    copies of one day double-weight it in every average downstream.
+    """
+
+    def test_a_file_whose_date_disagrees_with_its_name_is_detectable(self, tmp_path):
+        # File named 22082026 but containing 21-Aug-2026 data - the real case.
+        lines = [HEADER, row("RELIANCE", "21-Aug-2026", 1316.00, 5_434_871, 62.62)]
+        p = tmp_path / "22082026.csv.gz"
+        p.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+
+        from datetime import datetime
+
+        stamp = datetime.strptime(p.stem.replace(".csv", ""), "%d%m%Y").date()
+        inner = _read_bhavcopy(p)["date"].iloc[0].date()
+        assert inner != stamp
+
+    def test_the_fetcher_rejects_a_stale_body(self):
+        """_dates_match is what stands between the cache and 50 duplicate days."""
+        import importlib.util
+        from datetime import date as _date
+
+        spec = importlib.util.spec_from_file_location(
+            "fetch_bhavcopy", "scripts/fetch_bhavcopy.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        body = (HEADER + "\n" + row("RELIANCE", "21-Aug-2026", 1316.0, 100, 50.0)).encode()
+        assert mod._dates_match(body, _date(2026, 8, 21))
+        assert not mod._dates_match(body, _date(2026, 8, 22))
+
+    def test_garbage_body_does_not_pass_the_date_check(self):
+        import importlib.util
+        from datetime import date as _date
+
+        spec = importlib.util.spec_from_file_location(
+            "fetch_bhavcopy", "scripts/fetch_bhavcopy.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert not mod._dates_match(b"SYMBOL\nnonsense", _date(2026, 8, 21))
+
+
 class TestNseUniverse:
     def test_the_real_constituent_list_loads(self):
         u = NseUniverse()

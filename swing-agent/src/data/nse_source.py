@@ -19,6 +19,7 @@ backtest that hits the network per bar is not reproducible.
 from __future__ import annotations
 
 import gzip
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
@@ -66,14 +67,30 @@ def load_cache(start: date | None = None, end: date | None = None) -> pd.DataFra
             f"no bhavcopy cache at {BHAVCOPY}. Run: python scripts/fetch_bhavcopy.py"
         )
 
-    frames = []
+    frames, stale = [], []
     for path in sorted(BHAVCOPY.glob("*.csv.gz")):
         stamp = datetime.strptime(path.stem.replace(".csv", ""), "%d%m%Y").date()
         if start and stamp < start:
             continue
         if end and stamp > end:
             continue
-        frames.append(_read_bhavcopy(path))
+        day = _read_bhavcopy(path)
+        # Defence in depth against the stale-file trap described in
+        # scripts/fetch_bhavcopy.py: NSE answers some non-trading stamps with
+        # the PREVIOUS trading day's file, header intact. The fetcher rejects
+        # those now, but a cache populated before that fix still holds them and
+        # nothing downstream would notice two copies of one day.
+        if day.empty or day["date"].iloc[0].date() != stamp:
+            stale.append(path.name)
+            continue
+        frames.append(day)
+
+    if stale:
+        print(
+            f"warning: skipped {len(stale)} cached files whose DATE1 does not match "
+            f"their filename (stale NSE responses); delete and re-fetch them",
+            file=sys.stderr,
+        )
 
     if not frames:
         raise FileNotFoundError(f"no cached bhavcopy days in range at {BHAVCOPY}")
