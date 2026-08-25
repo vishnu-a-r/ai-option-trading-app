@@ -16,7 +16,10 @@ config sector_overrides for BANKING and NBFC are still empty stubs.
 from __future__ import annotations
 
 import argparse
+import io as _io
 import sys
+
+import yaml
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -30,9 +33,10 @@ from src.data.nse_source import (
     NseUniverse,
     load_cache,
     load_fo_cache,
+    sector_shortlist,
 )
 from src.indicators.momentum import rsi
-from src.risk.sizing import stop_level
+from src.risk.sizing import size_with_reason, stop_level
 from src.scoring.composite import rank
 from src.screens.long_pullback import evaluate
 
@@ -86,25 +90,33 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load("config/strategy.yaml")
+    ucfg = yaml.safe_load(_io.open("config/universe.yaml", encoding="utf-8"))
     universe = NseUniverse()
     names = universe.company_names()
+    capital = cfg["risk"]["capital_inr"]
 
-    symbols = universe.in_sector(args.sector)
-    kept = [s for s in symbols if not s.startswith(tuple(args.exclude))] if args.exclude else symbols
-    dropped = sorted(set(symbols) - set(kept))
-    print(f"{args.sector}: {len(symbols)} names")
-    if dropped:
-        print(f"excluded ({', '.join(args.exclude)}): {len(dropped)} -> {', '.join(dropped)}")
+    end = date.fromisoformat(args.end)
+    cash = load_cache()
+    kept, prov = sector_shortlist(universe, args.sector, cash, end, ucfg)
+
+    print(f"{args.sector}: {prov['sector_members']} names in the sector")
+    if prov["excluded_by_prefix"]:
+        print(f"  excluded by prefix: {', '.join(prov['excluded_by_prefix'])}")
+    if prov["no_liquidity_window"]:
+        print(f"  no {ucfg['sector_universe']['avg_days']}d liquidity window: "
+              f"{len(prov['no_liquidity_window'])}")
+    if prov["cap"]:
+        print(f"  capped to top {prov['cap']} by 20d avg traded value "
+              f"(NOT a quality ranking - see universe.yaml)")
     print(f"screening: {len(kept)}\n")
 
-    source = NsePriceSource(cfg, frame=load_cache())
+    source = NsePriceSource(cfg, frame=cash)
     try:
         futures = NseFuturesSource(cfg, frame=load_fo_cache())
     except FileNotFoundError:
         futures = None
         print("no F&O cache - futures family will be absent from every score\n")
-    end = date.fromisoformat(args.end)
-    start = date(end.year - 3, 1, 1)
+    start = date(end.year - 5, 1, 1)
 
     passes, rejects, unusable = [], [], []
     for symbol in kept:
@@ -159,8 +171,8 @@ def main() -> int:
     ranked = rank(candidates, cfg)[: args.top]
 
     print(f"TOP {len(ranked)} BY TECHNICAL SETUP  (technical only - see module docstring)\n")
-    hdr = (f"{'#':<3}{'SYMBOL':<12}{'COMPANY':<30}{'ENTRY':>9}{'STOP':>9}"
-           f"{'R%':>7}{'RSI':>5}{'FUT':>6}{'COV':>6}")
+    hdr = (f"{'#':<3}{'SYMBOL':<12}{'COMPANY':<28}{'ENTRY':>9}{'STOP':>9}"
+           f"{'R%':>6}{'QTY':>6}{'VALUE':>9}{'RISK':>7}{'FUT':>6}{'COV':>6}")
     print(hdr)
     print("-" * len(hdr))
     lookup = {s: (r, df) for s, r, df, _ in passes}
@@ -169,12 +181,16 @@ def main() -> int:
         r14 = rsi(df["close"], cfg["long_pullback"]["momentum"]["rsi_period"]).iloc[-1]
         risk = c.entry - c.stop
         fut = c.components.get("futures_confirmation")
+        qty, why = size_with_reason(c.entry, c.stop, capital, cfg)
         print(
-            f"{i:<3}{c.symbol:<12}{names.get(c.symbol,'')[:28]:<30}"
-            f"{c.entry:>9.2f}{c.stop:>9.2f}{100*risk/c.entry:>6.1f}%"
-            f"{r14:>5.0f}{('-' if fut is None else f'{fut:.2f}'):>6}{c.coverage:>6.2f}"
+            f"{i:<3}{c.symbol:<12}{names.get(c.symbol,'')[:26]:<28}"
+            f"{c.entry:>9.2f}{c.stop:>9.2f}{100*risk/c.entry:>5.1f}%"
+            f"{qty:>6}{qty*c.entry:>9.0f}{qty*risk:>7.0f}"
+            f"{('-' if fut is None else f'{fut:.2f}'):>6}{c.coverage:>6.2f}"
         )
         print(f"   {result.reason}")
+        if why:
+            print(f"   ! {why}")
     return 0
 
 

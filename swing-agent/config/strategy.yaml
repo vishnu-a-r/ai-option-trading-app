@@ -123,14 +123,20 @@ risk:
   # whichever binds first is the right answer.
   max_sector_exposure_pct: 40
 
-  # Both sector caps are unenforceable until each symbol carries a sector label,
-  # and the taxonomy LEVEL changes what the numbers mean. A broad
-  # "Financial Services" bucket lumps private banks, PSU banks, NBFCs, insurers
-  # and AMCs together - names that do not move together - and makes 40% loose.
-  # Sub-industry buckets make it bite constantly. Pin this before tuning either
-  # number; do not let the agent pick a taxonomy implicitly from whatever field
-  # the data source happens to return.
-  sector_taxonomy: null             # TODO choose: nse_macro | amfi | gics_sector | gics_sub_industry
+  # PINNED to the Industry column of NSE's own Nifty 500 constituent CSV -
+  # 20 buckets, and the only taxonomy actually in the data. Chosen because no
+  # other source was available, not because it is the ideal granularity.
+  #
+  # Know its weakness: "Financial Services" is one bucket holding 101 of the
+  # 500 - private banks, PSU banks, NBFCs, insurers, AMCs and exchanges, names
+  # that do not move together. A 40% exposure cap on that bucket is loose, and
+  # a sub-industry split would make it bite properly. The universe cap in
+  # universe.yaml is the partial answer: it stops the bucket dominating the
+  # RANKING. It does not make the exposure cap tighter.
+  #
+  # If a finer taxonomy ever becomes available, this is the key to change and
+  # max_sector_exposure_pct should be revisited at the same time.
+  sector_taxonomy: nse_industry
 
   # CASH DEPLOYMENT CAP.
   # Exposure is simply qty * price now that everything is a cash-equity long.

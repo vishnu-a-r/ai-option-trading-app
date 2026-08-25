@@ -383,3 +383,74 @@ class NseFuturesSource:
         out = self._fo.loc[wanted, columns]
         dates = out.index.get_level_values("date")
         return out[(dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))].sort_index()
+
+
+# --- Universe shortlisting ---------------------------------------------------
+
+
+def avg_traded_value(
+    symbols: Iterable[str], cash: pd.DataFrame, as_of: date, days: int = 20
+) -> pd.Series:
+    """Trailing average traded value in crore, per symbol.
+
+    The window ENDS at as_of inclusive. Symbols without a full window are
+    dropped rather than averaged over what they have: a name that listed three
+    weeks ago has no 20-day liquidity, and a three-day average standing in for
+    one would rank it against names measured properly.
+    """
+    if days < 1:
+        raise ValueError(f"days must be >= 1, got {days}")
+
+    out = {}
+    cutoff = pd.Timestamp(as_of)
+    for symbol in symbols:
+        try:
+            series = cash.loc[symbol, "turnover_cr"]
+        except KeyError:
+            continue
+        window = series[series.index <= cutoff].tail(days)
+        if len(window) < days:
+            continue
+        out[symbol] = float(window.mean())
+    return pd.Series(out, dtype=float).sort_values(ascending=False)
+
+
+def sector_shortlist(
+    universe: "NseUniverse",
+    industry: str,
+    cash: pd.DataFrame,
+    as_of: date,
+    cfg_universe: dict,
+) -> tuple[list[str], dict]:
+    """The names in `industry` that should actually be screened.
+
+    Applies, in order: sector membership, prefix exclusions, liquidity ranking,
+    and the per-sector cap. Returns (symbols, provenance) where provenance
+    records what each step removed - a shortlist that cannot explain itself is
+    not reviewable, and this one throws away 90% of a sector.
+
+    The cap exists because sector buckets are uneven: Financial Services is 101
+    of the Nifty 500. Screening all of them lets one bucket crowd the ranking
+    regardless of quality, which no downstream holding cap can undo.
+    """
+    settings = cfg_universe.get("sector_universe", {})
+    members = universe.in_sector(industry)
+
+    prefixes = tuple(settings.get("exclude_prefixes", {}).get(industry, ()))
+    kept = [s for s in members if not (prefixes and s.startswith(prefixes))]
+    excluded = sorted(set(members) - set(kept))
+
+    ranked = avg_traded_value(kept, cash, as_of, settings.get("avg_days", 20))
+    no_liquidity = sorted(set(kept) - set(ranked.index))
+
+    cap = settings.get("overrides", {}).get(industry, settings.get("max_names_per_sector"))
+    final = list(ranked.index[:cap]) if cap else list(ranked.index)
+
+    return final, {
+        "sector_members": len(members),
+        "excluded_by_prefix": excluded,
+        "no_liquidity_window": no_liquidity,
+        "ranked": len(ranked),
+        "cap": cap,
+        "turnover_cr": ranked,
+    }

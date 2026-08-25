@@ -349,3 +349,95 @@ class TestNseFuturesSource:
         from src.data.nse_source import NseFuturesSource
         with pytest.raises(NotImplementedError, match="near and next expiry"):
             NseFuturesSource(cfg, frame=fo_frame).rollover(["RELIANCE"], date(2026, 8, 25))
+
+
+class TestSectorShortlist:
+    """The cap that stops one bucket crowding the ranking."""
+
+    @pytest.fixture
+    def ucfg(self):
+        import io as _io
+        import yaml
+        return yaml.safe_load(_io.open("config/universe.yaml", encoding="utf-8"))
+
+    def test_financial_services_is_capped_to_ten(self, ucfg):
+        from src.data.nse_source import NseUniverse, load_cache, sector_shortlist
+        syms, prov = sector_shortlist(
+            NseUniverse(), "Financial Services", load_cache(), date(2026, 8, 21), ucfg
+        )
+        assert prov["sector_members"] == 101
+        assert len(syms) == 10
+
+    def test_hdfc_and_icici_are_removed_before_ranking(self, ucfg):
+        from src.data.nse_source import NseUniverse, load_cache, sector_shortlist
+        syms, prov = sector_shortlist(
+            NseUniverse(), "Financial Services", load_cache(), date(2026, 8, 21), ucfg
+        )
+        assert len(prov["excluded_by_prefix"]) == 7
+        assert not any(s.startswith(("HDFC", "ICICI")) for s in syms)
+
+    def test_the_shortlist_is_ordered_by_liquidity(self, ucfg):
+        from src.data.nse_source import NseUniverse, load_cache, sector_shortlist
+        syms, prov = sector_shortlist(
+            NseUniverse(), "Financial Services", load_cache(), date(2026, 8, 21), ucfg
+        )
+        values = [prov["turnover_cr"][s] for s in syms]
+        assert values == sorted(values, reverse=True)
+
+    def test_an_uncapped_sector_keeps_everything_liquid(self, ucfg):
+        from src.data.nse_source import NseUniverse, load_cache, sector_shortlist
+        u = NseUniverse()
+        syms, prov = sector_shortlist(u, "Capital Goods", load_cache(), date(2026, 8, 21), ucfg)
+        assert prov["cap"] is None
+        assert len(syms) == prov["ranked"]
+
+    def test_provenance_explains_every_dropped_name(self, ucfg):
+        """A shortlist that throws away 90% of a sector must show its working."""
+        from src.data.nse_source import NseUniverse, load_cache, sector_shortlist
+        syms, prov = sector_shortlist(
+            NseUniverse(), "Financial Services", load_cache(), date(2026, 8, 21), ucfg
+        )
+        accounted = (
+            len(syms)
+            + len(prov["excluded_by_prefix"])
+            + len(prov["no_liquidity_window"])
+            + (prov["ranked"] - len(syms))
+        )
+        assert accounted == prov["sector_members"]
+
+
+class TestAvgTradedValue:
+    def test_a_short_history_is_dropped_not_averaged(self):
+        """A three-day average must not rank against twenty-day ones."""
+        import pandas as pd
+        from src.data.nse_source import avg_traded_value
+        idx = pd.MultiIndex.from_product(
+            [["NEWLY"], pd.date_range("2026-08-01", periods=3)], names=["symbol", "date"]
+        )
+        cash = pd.DataFrame({"turnover_cr": [100.0, 100.0, 100.0]}, index=idx)
+        assert avg_traded_value(["NEWLY"], cash, date(2026, 8, 21), days=20).empty
+
+    def test_the_window_ends_at_as_of(self):
+        import pandas as pd
+        from src.data.nse_source import avg_traded_value
+        idx = pd.MultiIndex.from_product(
+            [["X"], pd.date_range("2026-08-01", periods=30)], names=["symbol", "date"]
+        )
+        cash = pd.DataFrame({"turnover_cr": [float(i) for i in range(30)]}, index=idx)
+        # as_of 2026-08-10 is the 10th bar, so only 10 exist - short of 20.
+        assert avg_traded_value(["X"], cash, date(2026, 8, 10), days=20).empty
+        assert not avg_traded_value(["X"], cash, date(2026, 8, 30), days=20).empty
+
+    def test_unknown_symbols_are_skipped(self):
+        import pandas as pd
+        from src.data.nse_source import avg_traded_value
+        idx = pd.MultiIndex.from_arrays([[], []], names=["symbol", "date"])
+        cash = pd.DataFrame({"turnover_cr": []}, index=idx)
+        assert avg_traded_value(["NOSUCH"], cash, date(2026, 8, 21)).empty
+
+    def test_non_positive_window_rejected(self):
+        import pandas as pd
+        from src.data.nse_source import avg_traded_value
+        idx = pd.MultiIndex.from_arrays([[], []], names=["symbol", "date"])
+        with pytest.raises(ValueError, match="days"):
+            avg_traded_value([], pd.DataFrame({"turnover_cr": []}, index=idx), date(2026, 8, 21), 0)

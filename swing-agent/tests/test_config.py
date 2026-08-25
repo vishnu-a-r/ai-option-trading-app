@@ -135,9 +135,9 @@ class TestRequire:
     def test_nested_path_walks_correctly(self, cfg):
         assert require(cfg, "long_pullback.momentum.rsi_min") == 30
 
-    def test_null_sector_taxonomy_raises(self, cfg):
-        with pytest.raises(UnresolvedConfig, match="sector_taxonomy"):
-            require(cfg, "risk.sector_taxonomy")
+    def test_sector_taxonomy_is_pinned_now(self, cfg):
+        """Was null; pinned to NSE's Industry column once the data supplied one."""
+        assert require(cfg, "risk.sector_taxonomy") == "nse_industry"
 
     @pytest.mark.parametrize(
         "key", ["min_roce", "min_roe", "max_debt_to_equity", "min_ocf_to_pat"]
@@ -148,7 +148,7 @@ class TestRequire:
 
     def test_the_message_says_not_to_substitute_a_default(self, cfg):
         with pytest.raises(UnresolvedConfig, match="Do not"):
-            require(cfg, "risk.sector_taxonomy")
+            require(cfg, "fundamental.long_gate.min_roce")
 
     def test_a_genuinely_absent_key_is_a_different_error(self, cfg):
         with pytest.raises(ConfigError, match="no such config key") as exc:

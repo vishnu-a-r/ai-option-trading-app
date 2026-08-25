@@ -74,29 +74,74 @@ def stop_level(df: pd.DataFrame, cfg: dict, as_of_bar: int | None = None) -> flo
 
 
 def position_size(entry: float, stop: float, capital: float, cfg: dict) -> int:
-    """Fixed fractional: risk_amount = capital * risk_per_trade_pct;
-    qty = risk_amount / abs(entry - stop). Round down to lot size for F&O.
+    """Fixed fractional. Rupee risk is fixed; QUANTITY is the output.
 
-    NOT IMPLEMENTED ON PURPOSE.
+    SOURCE OF TRUTH. SPEC section 9 asked for the formula to be ported from an
+    existing Excel system. That system does not exist - confirmed with Vishnu,
+    2026-08-25 - so the specification is the risk block in strategy.yaml, which
+    states the order of operations explicitly. Nothing here is invented; it is
+    the config comment executed. The earlier concern about matching an Excel
+    record is moot when there is no record to match.
 
-    SPEC.md section 9 says to port the exact formula from the existing Excel
-    swing system rather than invent one, and it has not been supplied yet. The
-    config comments describe the same shape, but the details that make a
-    backtest comparable to a live record are not in them: whether the 25%
-    concentration cap applies before or after rounding, what rounding is used,
-    and whether risk is taken on starting capital or on equity including open
-    P&L. Getting any of those wrong produces numbers that look right and cannot
-    be compared to anything.
+    Order, and it does not commute:
 
-    This raises rather than returning None so it cannot propagate silently into
-    a rupee figure on a report.
+      1. risk_amount = capital * risk_per_trade_pct / 100     (fixed, Rs 2,000)
+      2. qty         = risk_amount / abs(entry - stop)        (size is derived)
+      3. truncate to max_position_pct_of_capital              (cap binds AFTER)
+      4. floor to whole shares                                (cash equity)
+
+    Step 3 after step 2 is what the config means by "this cap binds first and
+    truncates it": the formula asks for a size, the cap cuts it down. Applying
+    the cap first and then deriving risk would invert the whole design - risk
+    would become an output of position size, which is the thing the block
+    exists to prevent.
+
+    A truncated position carries LESS than the full rupee risk. That is
+    intended, not a bug, and the caller should log it - see `binds` in
+    size_with_reason().
+
+    Returns 0 when the stop is at or through the entry, or when one full share
+    cannot be afforded within the cap. Zero means no trade.
     """
-    raise NotImplementedError(
-        "position_size needs the Excel formula (SPEC.md section 9), which has "
-        "not been supplied. Do not substitute the config comment - the rounding "
-        "and cap-ordering details it omits are what make backtest numbers "
-        "comparable to the live record."
-    )
+    qty, _ = size_with_reason(entry, stop, capital, cfg)
+    return qty
+
+
+def size_with_reason(
+    entry: float, stop: float, capital: float, cfg: dict
+) -> tuple[int, str | None]:
+    """position_size(), plus why the number came out the way it did.
+
+    The report has to be able to say "the concentration cap truncated this",
+    because on a tight-stop setup the effective risk is below 1% and a reader
+    comparing two lines of the shortlist deserves to know which one that
+    happened to.
+    """
+    risk = cfg["risk"]
+    if entry <= 0:
+        raise ValueError(f"entry must be positive, got {entry}")
+    if stop >= entry:
+        return 0, "stop at or above entry: not a long setup"
+
+    risk_amount = capital * risk["risk_per_trade_pct"] / 100.0
+    per_share = entry - stop
+    wanted = risk_amount / per_share
+
+    cap_value = capital * risk["max_position_pct_of_capital"] / 100.0
+    cap_qty = cap_value / entry
+
+    binds = cap_qty < wanted
+    qty = int(min(wanted, cap_qty))     # floor: cash equity trades whole shares
+
+    if qty == 0:
+        return 0, f"one share at {entry:.2f} exceeds the {risk['max_position_pct_of_capital']}% cap"
+    if binds:
+        actual = 100.0 * qty * per_share / capital
+        return qty, (
+            f"max_position_pct_of_capital truncated {wanted:.0f} -> {qty}; "
+            f"effective risk {actual:.2f}% not {risk['risk_per_trade_pct']}%"
+        )
+    return qty, None
 
 
 def portfolio_gates(open_positions: list[Position], candidate, cfg: dict) -> list[str]:

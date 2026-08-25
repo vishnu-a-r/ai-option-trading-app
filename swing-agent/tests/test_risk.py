@@ -14,7 +14,13 @@ import pytest
 
 from src.config import UnresolvedConfig, load
 from src.data.csv_source import CsvPriceSource
-from src.risk.sizing import Position, portfolio_gates, position_size, stop_level
+from src.risk.sizing import (
+    Position,
+    portfolio_gates,
+    position_size,
+    size_with_reason,
+    stop_level,
+)
 
 
 @pytest.fixture
@@ -100,24 +106,83 @@ class TestStopLevel:
 
 
 class TestPositionSize:
-    def test_it_raises_rather_than_returning_a_plausible_number(self, cfg):
-        with pytest.raises(NotImplementedError, match="Excel formula"):
-            position_size(100.0, 95.0, 200_000, cfg)
+    """Implemented from the risk block once it was confirmed no Excel exists.
 
-    def test_the_message_says_not_to_use_the_config_comment(self, cfg):
-        with pytest.raises(NotImplementedError, match="Do not substitute"):
-            position_size(100.0, 95.0, 200_000, cfg)
+    The invariant these protect: rupee risk is FIXED and quantity is derived.
+    Two setups of equal conviction carry equal risk regardless of stop
+    distance - unless the concentration cap truncates, which is intended and
+    must be reported rather than silently absorbed.
+    """
+
+    CAPITAL = 200_000
+
+    def test_quantity_is_derived_from_fixed_rupee_risk(self, cfg):
+        # Rs 2,000 risk / Rs 71.09 per share = 28 shares.
+        assert position_size(381.60, 310.51, self.CAPITAL, cfg) == 28
+
+    def test_equal_conviction_carries_equal_rupee_risk(self, cfg):
+        """The invariant the whole block exists to protect."""
+        wide = position_size(400.0, 350.0, self.CAPITAL, cfg)     # Rs 50 stop
+        wider = position_size(400.0, 300.0, self.CAPITAL, cfg)    # Rs 100 stop
+        assert wide * 50 == pytest.approx(2000, abs=50)
+        assert wider * 100 == pytest.approx(2000, abs=100)
+
+    def test_a_tighter_stop_gives_a_larger_position(self, cfg):
+        tight = position_size(400.0, 396.0, self.CAPITAL, cfg)
+        loose = position_size(400.0, 360.0, self.CAPITAL, cfg)
+        assert tight > loose
+
+    def test_the_concentration_cap_truncates_and_says_so(self, cfg):
+        qty, why = size_with_reason(100.0, 99.5, self.CAPITAL, cfg)
+        assert qty * 100.0 <= self.CAPITAL * cfg["risk"]["max_position_pct_of_capital"] / 100
+        assert "truncated" in why and "effective risk" in why
+
+    def test_a_truncated_position_carries_less_than_full_risk(self, cfg):
+        """Intended, not a bug - but it must be visible."""
+        qty, why = size_with_reason(100.0, 99.5, self.CAPITAL, cfg)
+        assert qty * 0.5 < self.CAPITAL * cfg["risk"]["risk_per_trade_pct"] / 100
+        assert why is not None
+
+    def test_an_untruncated_position_reports_no_reason(self, cfg):
+        _, why = size_with_reason(381.60, 310.51, self.CAPITAL, cfg)
+        assert why is None
+
+    def test_the_cap_is_applied_after_the_formula_not_before(self, cfg):
+        """Order does not commute. Cap first would make risk an OUTPUT of size."""
+        qty, _ = size_with_reason(100.0, 99.5, self.CAPITAL, cfg)
+        cap_qty = int(self.CAPITAL * cfg["risk"]["max_position_pct_of_capital"] / 100 / 100.0)
+        assert qty == cap_qty          # cap won, having truncated a larger number
+        assert qty < 2000 / 0.5        # ...which the formula alone would have produced
+
+    def test_a_stop_at_or_above_entry_is_no_trade(self, cfg):
+        assert position_size(100.0, 100.0, self.CAPITAL, cfg) == 0
+        assert position_size(100.0, 105.0, self.CAPITAL, cfg) == 0
+
+    def test_an_unaffordable_share_is_no_trade(self, cfg):
+        """One share above the 25% cap cannot be bought at all."""
+        qty, why = size_with_reason(80_000.0, 79_000.0, self.CAPITAL, cfg)
+        assert qty == 0 and "exceeds" in why
+
+    def test_whole_shares_only(self, cfg):
+        assert isinstance(position_size(1095.0, 1058.70, self.CAPITAL, cfg), int)
+
+    def test_non_positive_entry_is_rejected(self, cfg):
+        with pytest.raises(ValueError, match="entry"):
+            position_size(0.0, -1.0, self.CAPITAL, cfg)
 
 
 class TestSectorTaxonomyGuard:
-    def test_gates_raise_while_the_taxonomy_is_null(self, cfg):
-        """Skipping the sector caps would let a portfolio concentrate while the
-        report claimed a cap was in force."""
-        with pytest.raises(UnresolvedConfig, match="sector_taxonomy"):
-            portfolio_gates([], pos(), cfg)
+    def test_gates_run_now_that_a_taxonomy_is_pinned(self, cfg):
+        assert portfolio_gates([], pos(qty=10), cfg) == []
 
-    def test_gates_work_once_a_taxonomy_is_pinned(self, resolved):
-        assert portfolio_gates([], pos(qty=10), resolved) == []
+    def test_gates_still_raise_if_it_is_ever_unset(self, cfg):
+        """The guard has to keep working if someone nulls it again."""
+        import copy
+
+        unset = copy.deepcopy(cfg)
+        unset["risk"]["sector_taxonomy"] = None
+        with pytest.raises(UnresolvedConfig, match="sector_taxonomy"):
+            portfolio_gates([], pos(), unset)
 
 
 class TestPortfolioGates:
