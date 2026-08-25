@@ -186,3 +186,135 @@ class TestNseUniverse:
     def test_a_missing_file_is_reported_clearly(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="constituent list"):
             NseUniverse(tmp_path / "nope.csv")
+
+
+# --- Futures -----------------------------------------------------------------
+
+FO_COLS = (
+    "TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,XpryDt,"
+    "FininstrmActlXpryDt,StrkPric,OptnTp,FinInstrmNm,OpnPric,HghPric,LwPric,ClsPric,"
+    "LastPric,PrvsClsgPric,UndrlygPric,SttlmPric,OpnIntrst,ChngInOpnIntrst,"
+    "TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd,SsnId,NewBrdLotQty,Rmks,Rsvd1,Rsvd2,Rsvd3,Rsvd4"
+)
+
+
+def fo_row(symbol, expiry, close, oi, oi_chg, lot, tp="STF", trad="2026-08-21"):
+    v = {
+        "TradDt": trad, "FinInstrmTp": tp, "TckrSymb": symbol, "XpryDt": expiry,
+        "ClsPric": close, "OpnIntrst": oi, "ChngInOpnIntrst": oi_chg,
+        "TtlTradgVol": 1000, "NewBrdLotQty": lot,
+    }
+    return ",".join(str(v.get(c, "")) for c in FO_COLS.split(","))
+
+
+@pytest.fixture
+def fo_zip(tmp_path):
+    import zipfile
+    lines = [
+        FO_COLS,
+        fo_row("RELIANCE", "2026-08-25", 1310.10, 48_400_000, -25_517_000, 500),
+        fo_row("RELIANCE", "2026-10-27", 1324.90, 5_184_500, 475_000, 500),   # far month
+        fo_row("SBIN", "2026-08-25", 1042.50, 10_000_000, 250_000, 750),
+        fo_row("NIFTY", "2026-08-25", 25000.0, 1_000, 10, 25, tp="IDF"),       # index
+    ]
+    p = tmp_path / "20260821.csv.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr("BhavCopy_NSE_FO_0_0_0_20260821_F_0000.csv", "\n".join(lines) + "\n")
+    return p
+
+
+@pytest.fixture
+def fo_frame(fo_zip):
+    from src.data.nse_source import _read_fo
+    df = _read_fo(fo_zip)
+    return (
+        df.sort_values("expiry")
+        .groupby(["symbol", "date"], as_index=False)
+        .first()
+        .set_index(["symbol", "date"])
+        .sort_index()
+    )
+
+
+class TestFuturesParsing:
+    def test_only_stock_futures_are_kept(self, fo_zip):
+        """The file is ~55,000 rows of options and index contracts too."""
+        from src.data.nse_source import _read_fo
+        assert set(_read_fo(fo_zip)["symbol"]) == {"RELIANCE", "SBIN"}
+
+    def test_near_month_wins_over_far_month(self, fo_frame):
+        """Far months are thin and their OI moves for rollover reasons."""
+        import pandas as pd
+        row = fo_frame.loc[("RELIANCE", pd.Timestamp("2026-08-21"))]
+        assert row["expiry"] == pd.Timestamp("2026-08-25")
+        assert row["open_interest"] == 48_400_000
+
+
+class TestNseFuturesSource:
+    def test_symbols_lists_underlyings(self, cfg, fo_frame):
+        from src.data.nse_source import NseFuturesSource
+        assert NseFuturesSource(cfg, frame=fo_frame).symbols() == ["RELIANCE", "SBIN"]
+
+    def test_basis_is_futures_minus_spot(self, cfg, fo_frame):
+        from src.data.nse_source import NseFuturesSource
+        import pandas as pd
+        spot = pd.Series({"RELIANCE": 1316.00})
+        out = NseFuturesSource(cfg, frame=fo_frame).basis(
+            ["RELIANCE"], date(2026, 8, 21), spot
+        )
+        assert out.loc["RELIANCE", "basis"] == pytest.approx(-5.90)
+        assert out.loc["RELIANCE", "basis_pct"] == pytest.approx(-0.448, abs=0.01)
+
+    def test_basis_skips_symbols_with_no_spot(self, cfg, fo_frame):
+        from src.data.nse_source import NseFuturesSource
+        import pandas as pd
+        out = NseFuturesSource(cfg, frame=fo_frame).basis(
+            ["RELIANCE"], date(2026, 8, 21), pd.Series(dtype=float)
+        )
+        assert out.empty
+
+    def test_contract_spec_gives_lot_size_and_notional(self, cfg, fo_frame):
+        from src.data.nse_source import NseFuturesSource
+        out = NseFuturesSource(cfg, frame=fo_frame).contract_spec(
+            ["RELIANCE"], date(2026, 8, 21)
+        )
+        assert out.loc["RELIANCE", "lot_size"] == 500
+        assert out.loc["RELIANCE", "notional_per_lot"] == pytest.approx(655_050.0)
+
+    def test_one_lot_exceeds_the_whole_account(self, cfg, fo_frame):
+        """Measured confirmation of the audit's estimate: a single RELIANCE lot
+        is Rs 6.55 lakh against Rs 2 lakh capital."""
+        from src.data.nse_source import NseFuturesSource
+        out = NseFuturesSource(cfg, frame=fo_frame).contract_spec(
+            ["RELIANCE"], date(2026, 8, 21)
+        )
+        assert out.loc["RELIANCE", "notional_per_lot"] > cfg["risk"]["capital_inr"]
+
+    @pytest.mark.parametrize(
+        "price_change,oi_change,expected",
+        [
+            (1.0, 1, "long_buildup"),
+            (1.0, -1, "short_covering"),
+            (-1.0, 1, "short_buildup"),
+            (-1.0, -1, "long_unwinding"),
+        ],
+    )
+    def test_oi_buildup_classification(self, cfg, fo_frame, price_change, oi_change, expected):
+        from src.data.nse_source import NseFuturesSource
+        f = fo_frame.copy()
+        f.loc[("RELIANCE", pd.Timestamp("2026-08-21")), "oi_change"] = oi_change
+        assert NseFuturesSource(cfg, frame=f).oi_buildup(
+            "RELIANCE", date(2026, 8, 21), price_change
+        ) == expected
+
+    def test_unknown_symbol_has_no_buildup(self, cfg, fo_frame):
+        from src.data.nse_source import NseFuturesSource
+        assert NseFuturesSource(cfg, frame=fo_frame).oi_buildup(
+            "NOSUCH", date(2026, 8, 21), 1.0
+        ) is None
+
+    def test_rollover_refuses_rather_than_approximating(self, cfg, fo_frame):
+        """A rollover number from one expiry is not a rollover number."""
+        from src.data.nse_source import NseFuturesSource
+        with pytest.raises(NotImplementedError, match="near and next expiry"):
+            NseFuturesSource(cfg, frame=fo_frame).rollover(["RELIANCE"], date(2026, 8, 25))

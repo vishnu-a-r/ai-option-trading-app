@@ -198,3 +198,170 @@ class NseUniverse:
 
     def company_names(self) -> dict[str, str]:
         return dict(zip(self._df["Symbol"], self._df["Company Name"].str.strip()))
+
+
+# --- Futures -----------------------------------------------------------------
+
+FO_CACHE = CACHE / "fo"
+
+FO_KEEP = {
+    "TckrSymb": "symbol",
+    "XpryDt": "expiry",
+    "ClsPric": "close",
+    "OpnIntrst": "open_interest",
+    "ChngInOpnIntrst": "oi_change",
+    "TtlTradgVol": "contracts",
+    "NewBrdLotQty": "lot_size",
+}
+
+
+def _read_fo(path: Path) -> pd.DataFrame:
+    """One day's derivatives bhavcopy, stock futures (STF) only.
+
+    STF is the stock-futures instrument type. The same file also carries STO
+    (stock options), IDF and IDO (index futures/options) - roughly 55,000 rows
+    against 620 stock-futures rows, so filtering first matters.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(path) as zf:
+        with zf.open(zf.namelist()[0]) as fh:
+            df = pd.read_csv(fh)
+    df.columns = [c.strip() for c in df.columns]
+
+    df = df[df["FinInstrmTp"] == "STF"].copy()
+    df["date"] = pd.to_datetime(df["TradDt"])
+    out = df[["date", *FO_KEEP]].rename(columns=FO_KEEP)
+    out["expiry"] = pd.to_datetime(out["expiry"])
+    return out
+
+
+def load_fo_cache() -> pd.DataFrame:
+    """Every cached F&O day. Indexed (symbol, date), near-month contract only."""
+    if not FO_CACHE.is_dir():
+        raise FileNotFoundError(
+            f"no F&O cache at {FO_CACHE}. Run: python scripts/fetch_fo_bhavcopy.py"
+        )
+
+    frames = [_read_fo(p) for p in sorted(FO_CACHE.glob("*.csv.zip"))]
+    if not frames:
+        raise FileNotFoundError(f"no cached F&O days at {FO_CACHE}")
+
+    out = pd.concat(frames, ignore_index=True)
+    # A symbol has up to three live expiries on any day. The near month is the
+    # one that carries the liquidity and the signal; far months are thin and
+    # their OI moves for rollover reasons rather than directional ones.
+    near = out.sort_values("expiry").groupby(["symbol", "date"], as_index=False).first()
+    return near.set_index(["symbol", "date"]).sort_index()
+
+
+class NseFuturesSource:
+    """FuturesSource over the cached derivatives bhavcopy.
+
+    Serves the futures family of the composite score: OI buildup, basis, and
+    the contract spec. Rollover needs two consecutive expiries and is left
+    unimplemented rather than approximated - see rollover().
+    """
+
+    def __init__(self, cfg: dict, frame: pd.DataFrame | None = None):
+        self.cfg = cfg
+        self._fo = load_fo_cache() if frame is None else frame
+
+    def symbols(self) -> list[str]:
+        """Underlyings with stock futures - about 208 of the Nifty 500."""
+        return sorted(set(self._fo.index.get_level_values("symbol")))
+
+    def open_interest(
+        self, symbols: Iterable[str], start: date, end: date
+    ) -> pd.DataFrame:
+        return self._slice(symbols, start, end, ["open_interest", "oi_change"])
+
+    def basis(self, symbols: Iterable[str], as_of: date, spot: pd.Series) -> pd.DataFrame:
+        """Futures premium/discount to spot, absolute and as a percentage.
+
+        `spot` is the cash close per symbol on the same date; it is passed in
+        rather than looked up so this source never has to know about the cash
+        source.
+        """
+        rows = []
+        for symbol in symbols:
+            try:
+                fut = self._fo.loc[(symbol, pd.Timestamp(as_of)), "close"]
+            except KeyError:
+                continue
+            if symbol not in spot.index:
+                continue
+            cash = float(spot[symbol])
+            if cash <= 0:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "futures": float(fut),
+                    "spot": cash,
+                    "basis": float(fut) - cash,
+                    "basis_pct": 100.0 * (float(fut) - cash) / cash,
+                }
+            )
+        return pd.DataFrame(rows).set_index("symbol") if rows else pd.DataFrame()
+
+    def contract_spec(self, symbols: Iterable[str], as_of: date) -> pd.DataFrame:
+        """Lot size and expiry. Margin is not in the bhavcopy - see below."""
+        rows = []
+        for symbol in symbols:
+            try:
+                row = self._fo.loc[(symbol, pd.Timestamp(as_of))]
+            except KeyError:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "lot_size": int(row["lot_size"]),
+                    "expiry": row["expiry"].date(),
+                    "notional_per_lot": float(row["close"]) * int(row["lot_size"]),
+                }
+            )
+        return pd.DataFrame(rows).set_index("symbol") if rows else pd.DataFrame()
+
+    def rollover(self, symbols: Iterable[str], expiry: date) -> pd.DataFrame:
+        """NOT IMPLEMENTED.
+
+        Rollover percentage is near-month OI moving into the next expiry, so it
+        needs both contracts on the same day. load_fo_cache() keeps only the
+        near month, which is the right default for OI and basis and the wrong
+        one here. Implementing this means changing what the cache retains, not
+        approximating from one series - a rollover number derived from a single
+        expiry is not a rollover number.
+        """
+        raise NotImplementedError(
+            "rollover needs near and next expiry on the same day; load_fo_cache() "
+            "keeps only the near month. Widen the cache rather than approximating."
+        )
+
+    def oi_buildup(self, symbol: str, as_of: date, price_change: float) -> str | None:
+        """Classify the OI/price combination.
+
+        Rising price with rising OI is a long buildup; falling price with rising
+        OI is a short buildup. Falling OI is unwinding either way. This is the
+        futures confirmation SPEC section 7 asks for.
+        """
+        try:
+            row = self._fo.loc[(symbol, pd.Timestamp(as_of))]
+        except KeyError:
+            return None
+        oi_up = float(row["oi_change"]) > 0
+        if price_change > 0:
+            return "long_buildup" if oi_up else "short_covering"
+        if price_change < 0:
+            return "short_buildup" if oi_up else "long_unwinding"
+        return None
+
+    def _slice(
+        self, symbols: Iterable[str], start: date, end: date, columns: list[str]
+    ) -> pd.DataFrame:
+        wanted = [s for s in symbols if s in self._fo.index.get_level_values("symbol")]
+        if not wanted:
+            return pd.DataFrame(columns=columns)
+        out = self._fo.loc[wanted, columns]
+        dates = out.index.get_level_values("date")
+        return out[(dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))].sort_index()
