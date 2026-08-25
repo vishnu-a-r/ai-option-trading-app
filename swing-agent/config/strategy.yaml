@@ -85,6 +85,39 @@ data_quality:
   max_stale_bar_pct: 5          # above this the SYMBOL is excluded, not cleaned and screened anyway
   min_bars_required: 250        # 200 SMA needs 200 clean bars; leave headroom for the pullback window
 
+  corporate_actions:
+    # NSE bhavcopy is UNADJUSTED. 105 of the Nifty 500 - 21% - carry at least
+    # one split or bonus in the cached window, and an unadjusted 1:1 bonus looks
+    # exactly like a 50% crash to every indicator downstream.
+    ratio_lower: 0.60           # a session ratio at or below this is suspect
+    ratio_upper: 1.80           # ...or at or above this
+    # How far the observed ratio may sit from a clean fraction and still be
+    # treated as a split. The stock moves on the ex-date too, so 1:1 bonuses
+    # land near 0.50 rather than on it - RELIANCE printed 0.502. Too tight and
+    # real splits are missed; too loose and a genuine crash gets "adjusted"
+    # into a continuous-looking series that is wrong.
+    clean_ratio_tolerance_pct: 6
+    # Kept at 6 deliberately, knowing it refuses ~8 symbols whose ratio clusters
+    # near 0.22 - IRCTC, AFFLE, KPRMILL and others. Those are almost certainly
+    # 1:5 splits where the stock also moved ~10% on the ex-date, and widening
+    # the tolerance to about 12 would capture them. It would also start matching
+    # genuine crashes, and the cost is asymmetric: refusing a real symbol loses
+    # one name from a 500-name universe, while adjusting a real crash invents a
+    # continuous price series that no downstream check can detect. Refuse.
+    # A ratio measured across a hole in the series is not a corporate action.
+    # The EQ-series filter drops a stock while it sits in the BE/trade-for-trade
+    # segment under surveillance, so CGPOWER has no bars for four months and
+    # TTML none for five. Comparing the prices either side produced phantom
+    # 2-3x "splits". More than this many calendar days between consecutive bars
+    # and the event is a data gap, and the symbol is refused rather than
+    # adjusted.
+    max_gap_days: 10
+    # A symbol whose event matches no clean fraction is REFUSED, not adjusted.
+    # Demergers are the usual cause: value leaves for a new entity and no single
+    # factor reconstructs the series. An almost-right factor is worse than an
+    # obviously broken one because it hides.
+    refuse_unmatched: true
+
 institutional:
   shareholding_qoq_lookback: 4
   bulk_deal_lookback_days: 90

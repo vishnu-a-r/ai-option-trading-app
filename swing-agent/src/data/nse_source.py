@@ -26,6 +26,7 @@ from typing import Iterable
 
 import pandas as pd
 
+from .corporate_actions import Adjustment, adjust, detect
 from .quality import QualityReport, clean_ohlcv
 
 CACHE = Path(__file__).resolve().parents[2] / "data" / "cache"
@@ -111,6 +112,7 @@ class NsePriceSource:
         self.cfg = cfg
         self._raw = load_cache() if frame is None else frame
         self.reports: dict[str, QualityReport] = {}
+        self.adjustments: dict[str, list[Adjustment]] = {}
 
     def ohlcv(
         self, symbols: Iterable[str], start: date, end: date, interval: str = "1d"
@@ -154,9 +156,35 @@ class NsePriceSource:
         return sorted(set(self._raw.index.get_level_values("symbol")))
 
     def _one(self, symbol: str) -> pd.DataFrame | None:
+        """Adjust for corporate actions, then screen for bar quality.
+
+        Order matters. Adjustment must run BEFORE the quality screen, because an
+        unadjusted split is not a quality defect the screen would catch - the
+        bars either side of it are individually valid, and only the ratio
+        between them gives it away.
+
+        A symbol carrying an event that cannot be adjusted - a demerger, or a
+        gap in the series from a spell in the BE segment - is refused here
+        rather than returned with a discontinuity nothing downstream would
+        notice.
+        """
         if symbol not in self._raw.index.get_level_values("symbol"):
             return None
         df = self._raw.loc[symbol, OHLCV].sort_index()
+
+        events = detect(df["close"], self.cfg)
+        self.adjustments[symbol] = events
+        if self.cfg["data_quality"]["corporate_actions"]["refuse_unmatched"]:
+            if any(not e.adjustable for e in events):
+                self.reports[symbol] = QualityReport(
+                    symbol=symbol,
+                    bars_in=len(df),
+                    bars_out=0,
+                    reasons=[f"corporate actions: {'; '.join(str(e) for e in events if not e.adjustable)}"],
+                )
+                return None
+        df = adjust(df, events)
+
         clean, report = clean_ohlcv(df, self.cfg["data_quality"], symbol)
         self.reports[symbol] = report
         return clean if report.usable else None

@@ -7,34 +7,62 @@ Run `python scripts/run_backtest.py` to reproduce. Transaction costs are modelle
 
 ## Full Nifty 500 — the result that counts
 
-478 usable symbols (22 excluded by bar quality), 2020-06-01 → 2026-08-21, **644 trades**:
+463 usable symbols (37 excluded by bar quality and corporate actions),
+2020-06-01 → 2026-08-21, **651 trades, costs modelled, prices split-adjusted**:
 
 ```
-win rate               39.6%
-average R (net)        -0.111
-  gross                -0.055
-  cost drag            0.057 R/trade
-max drawdown           59.1%
-longest losing streak  19
-exits                  stop=199, stop_gap=36, time_stop=409
+win rate               37.9%
+average R (net)        -0.059
+  gross                -0.005
+  cost drag            0.055 R/trade
+max drawdown           68.8%
+longest losing streak  21
+exits                  stop=210, stop_gap=32, time_stop=409
 
-  trending      trades=170   win=44.1%   avgR=-0.155
-  range_bound   trades=466   win=37.8%   avgR=-0.101
+  trending      trades=176   win=46.6%   avgR=+0.080
+  range_bound   trades=465   win=34.6%   avgR=-0.109
 ```
 
-**A 59.1% drawdown and a 19-trade losing streak are not survivable.** Not as ruin —
-position sizing caps that — but nobody keeps following a system through nineteen
-consecutive losers with the account more than halved.
+**A 68.8% drawdown and 21 consecutive losers are not survivable.** Not as ruin —
+sizing caps that — but nobody follows a system through it.
 
-**Costs changed the verdict, not just the decimal.** The first version of this run
-modelled no costs and reported −0.026, which reads as "roughly breakeven, worth
-tuning". With costs it is −0.111: a system losing about a ninth of its risked amount
-on every trade. The drag of 0.057 R/trade landed at the top of the 0.02–0.06 estimate
-made before it was measured. Note gross also moved (−0.026 → −0.055), because slippage
-changes fill prices rather than being deducted afterwards, so it alters which trades
-happen and at what level.
+### Adjusting for splits changed the answer
 
-## The regime conclusion did not survive
+The run before this one used unadjusted prices, in which 105 of 500 symbols carried
+at least one split or bonus that every indicator read as a 50-80% crash:
+
+| | unadjusted | split-adjusted |
+|---|---|---|
+| average R (net) | −0.111 | **−0.059** |
+| average R (gross) | −0.055 | **−0.005** |
+| max drawdown | 59.1% | **68.8%** |
+| trending avg R | −0.155 | **+0.080** |
+| range-bound avg R | −0.101 | −0.109 |
+
+Net R nearly halved and the trending bucket flipped sign. Drawdown got *worse*. The
+direction was not predictable in advance, which is the argument for fixing data before
+tuning anything: a refinement developed on the unadjusted series would have been fitted
+to artifacts, and there is no way to tell from the inside which numbers those were.
+
+**Still losing.** Gross is now roughly flat (−0.005) and costs alone push it negative.
+
+### The regime split, again — and why it is still not an instruction
+
+Trending now reads **+0.080 on 176 trades**, against range-bound −0.109 on 465. That
+is the same shape as the 13-name result recorded below, which did not replicate — but
+on a sample four times larger and on corrected data.
+
+That makes it worth *testing*. It does not make it a finding. The earlier version of
+this document treated a 39-trade split as an instruction and was wrong. The difference
+between a hypothesis and a result is out-of-sample validation, which has not been done:
+develop on 2020–2023, verify on 2024–2026 held out. Until then a regime filter is a
+plausible idea, not a change to make.
+
+Note also that +0.080 net R is thin. Even if it survives out-of-sample, a system that
+trades only in trending regimes takes roughly a quarter of the signals for a payoff
+barely above zero after costs.
+
+## The 13-name regime conclusion, kept as a warning
 
 An earlier run over 13 Financial Services names showed this:
 
@@ -74,6 +102,13 @@ never calibrated against anything.
   Rates are the common Indian discount-broker structure and should be replaced with
   figures from an actual contract note.
 - **Slippage** — 0.05% each side, applied to the fill price rather than as a fee.
+
+## Now modelled (2)
+
+- **Corporate actions** — splits and bonuses are back-adjusted from the price series,
+  since NSE publishes no corporate-actions file. Symbols whose event matches no clean
+  split ratio, or whose "event" spans a gap in the data, are refused rather than
+  adjusted by the nearest guess: 90 adjusted, 15 refused.
 
 ## Still not modelled — results remain optimistic
 
