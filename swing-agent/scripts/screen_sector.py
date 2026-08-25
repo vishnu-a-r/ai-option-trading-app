@@ -32,7 +32,9 @@ from src.data.nse_source import (
     NsePriceSource,
     NseUniverse,
     load_cache,
+    benchmark_series,
     load_fo_cache,
+    load_index_cache,
     sector_shortlist,
 )
 from src.indicators.momentum import rsi
@@ -112,12 +114,18 @@ def main() -> int:
 
     source = NsePriceSource(cfg, frame=cash)
     try:
+        benchmark = benchmark_series(load_index_cache())
+    except (FileNotFoundError, KeyError) as exc:
+        benchmark = None
+        print(f"no index benchmark ({exc}); relative strength will be absent\n")
+    try:
         futures = NseFuturesSource(cfg, frame=load_fo_cache())
     except FileNotFoundError:
         futures = None
         print("no F&O cache - futures family will be absent from every score\n")
     start = date(end.year - 5, 1, 1)
 
+    ctx = {} if benchmark is None else {"benchmark": benchmark}
     passes, rejects, unusable = [], [], []
     for symbol in kept:
         df = source.ohlcv([symbol], start, end)
@@ -125,7 +133,7 @@ def main() -> int:
             unusable.append((symbol, source.reports.get(symbol)))
             continue
         df = df.droplevel("symbol")
-        result = evaluate(df, symbol, cfg, {})
+        result = evaluate(df, symbol, cfg, ctx)
         if result.passed:
             stop = stop_level(df, cfg)
             if stop is None:
@@ -152,10 +160,12 @@ def main() -> int:
     for sym, result, df, stop in passes:
         close = df["close"]
         change = float(close.iloc[-1] - close.iloc[-2]) if len(close) > 1 else 0.0
-        components = {
-            "technical_setup": technical_score(result),
-            "relative_strength": 0.0,
-        }
+        components = {"technical_setup": technical_score(result)}
+        # Absent benchmark means the family is UNMEASURED, not zero. Scoring it
+        # 0.0 would mark every candidate down for underperformance that was
+        # never measured; leaving it out lets rank() renormalise instead.
+        if benchmark is not None:
+            components["relative_strength"] = result.confirmations["relative_strength"]
         fut_score = futures_score(futures, sym, end, change)
         if fut_score is not None:
             components["futures_confirmation"] = fut_score
@@ -172,7 +182,7 @@ def main() -> int:
 
     print(f"TOP {len(ranked)} BY TECHNICAL SETUP  (technical only - see module docstring)\n")
     hdr = (f"{'#':<3}{'SYMBOL':<12}{'COMPANY':<28}{'ENTRY':>9}{'STOP':>9}"
-           f"{'R%':>6}{'QTY':>6}{'VALUE':>9}{'RISK':>7}{'FUT':>6}{'COV':>6}")
+           f"{'R%':>6}{'QTY':>6}{'VALUE':>9}{'RISK':>7}{'RS':>6}{'FUT':>6}{'COV':>6}")
     print(hdr)
     print("-" * len(hdr))
     lookup = {s: (r, df) for s, r, df, _ in passes}
@@ -181,11 +191,13 @@ def main() -> int:
         r14 = rsi(df["close"], cfg["long_pullback"]["momentum"]["rsi_period"]).iloc[-1]
         risk = c.entry - c.stop
         fut = c.components.get("futures_confirmation")
+        rs = c.components.get("relative_strength")
         qty, why = size_with_reason(c.entry, c.stop, capital, cfg)
         print(
             f"{i:<3}{c.symbol:<12}{names.get(c.symbol,'')[:26]:<28}"
             f"{c.entry:>9.2f}{c.stop:>9.2f}{100*risk/c.entry:>5.1f}%"
             f"{qty:>6}{qty*c.entry:>9.0f}{qty*risk:>7.0f}"
+            f"{('-' if rs is None else f'{rs:.2f}'):>6}"
             f"{('-' if fut is None else f'{fut:.2f}'):>6}{c.coverage:>6.2f}"
         )
         print(f"   {result.reason}")

@@ -454,3 +454,75 @@ def sector_shortlist(
         "cap": cap,
         "turnover_cr": ranked,
     }
+
+
+# --- Index series -------------------------------------------------------------
+
+INDEX_CACHE = CACHE / "index"
+BENCHMARK = "Nifty 500"
+
+
+def _read_index(path: Path) -> pd.DataFrame:
+    with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fh:
+        df = pd.read_csv(fh)
+    df.columns = [c.strip() for c in df.columns]
+    df["index_name"] = df["Index Name"].str.strip()
+    df["date"] = pd.to_datetime(df["Index Date"].str.strip(), format="%d-%m-%Y")
+    for src, dst in [
+        ("Open Index Value", "open"),
+        ("High Index Value", "high"),
+        ("Low Index Value", "low"),
+        ("Closing Index Value", "close"),
+    ]:
+        df[dst] = pd.to_numeric(df[src], errors="coerce")
+    return df[["index_name", "date", "open", "high", "low", "close"]]
+
+
+def load_index_cache() -> pd.DataFrame:
+    """Every cached index day, indexed (index_name, date).
+
+    Carries the broad indices and the sectorals - 165 series - so both a
+    market benchmark and a sector-relative one are available.
+    """
+    if not INDEX_CACHE.is_dir():
+        raise FileNotFoundError(
+            f"no index cache at {INDEX_CACHE}. Run: python scripts/fetch_index_close.py"
+        )
+
+    frames, stale = [], []
+    for path in sorted(INDEX_CACHE.glob("*.csv.gz")):
+        stamp = datetime.strptime(path.stem.replace(".csv", ""), "%d%m%Y").date()
+        day = _read_index(path)
+        if day.empty or day["date"].iloc[0].date() != stamp:
+            stale.append(path.name)
+            continue
+        frames.append(day)
+
+    if stale:
+        print(
+            f"warning: skipped {len(stale)} index files whose date does not match "
+            f"their filename",
+            file=sys.stderr,
+        )
+    if not frames:
+        raise FileNotFoundError(f"no cached index days at {INDEX_CACHE}")
+
+    out = pd.concat(frames, ignore_index=True)
+    return out.set_index(["index_name", "date"]).sort_index()
+
+
+def benchmark_series(index_frame: pd.DataFrame, name: str = BENCHMARK) -> pd.Series:
+    """Closing values for one index, as a date-indexed series.
+
+    This is what relative_strength() compares against. Without it the family
+    scores 0.0 for every candidate - not because they underperform, but because
+    nothing was there to measure them against, which is a different thing and
+    was silently indistinguishable in the output.
+    """
+    available = set(index_frame.index.get_level_values("index_name"))
+    if name not in available:
+        raise KeyError(
+            f"index {name!r} not in the cache. {len(available)} available, e.g. "
+            f"{sorted(list(available))[:3]}"
+        )
+    return index_frame.loc[name, "close"].sort_index()

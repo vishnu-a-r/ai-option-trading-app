@@ -441,3 +441,69 @@ class TestAvgTradedValue:
         idx = pd.MultiIndex.from_arrays([[], []], names=["symbol", "date"])
         with pytest.raises(ValueError, match="days"):
             avg_traded_value([], pd.DataFrame({"turnover_cr": []}, index=idx), date(2026, 8, 21), 0)
+
+
+IDX_HDR = (
+    "Index Name,Index Date,Open Index Value,High Index Value,Low Index Value,"
+    "Closing Index Value,Points Change,Change(%),Volume,Turnover (Rs. Cr.),P/E,P/B,Div Yield"
+)
+
+
+def idx_row(name, day, close):
+    return f"{name},{day},{close-10:.2f},{close+5:.2f},{close-20:.2f},{close:.2f},1,.01,100,100,22.8,3.2,.9"
+
+
+@pytest.fixture
+def index_file(tmp_path):
+    lines = [
+        IDX_HDR,
+        idx_row("Nifty 500", "21-08-2026", 23530.30),
+        idx_row("Nifty 50", "21-08-2026", 25100.00),
+        idx_row("Nifty Financial Services", "21-08-2026", 28400.00),
+    ]
+    p = tmp_path / "21082026.csv.gz"
+    p.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    return p
+
+
+class TestIndexSource:
+    def test_index_file_parses(self, index_file):
+        from src.data.nse_source import _read_index
+        df = _read_index(index_file)
+        assert set(df["index_name"]) == {"Nifty 500", "Nifty 50", "Nifty Financial Services"}
+        assert df["date"].iloc[0] == pd.Timestamp("2026-08-21")
+
+    def test_the_index_date_format_differs_from_the_bhavcopy(self, index_file):
+        """Index Date is DD-MM-YYYY; the bhavcopy uses DD-Mon-YYYY."""
+        from src.data.nse_source import _read_index
+        assert _read_index(index_file)["date"].iloc[0] == pd.Timestamp("2026-08-21")
+
+    def test_benchmark_series_returns_closes(self, index_file):
+        from src.data.nse_source import _read_index, benchmark_series
+        frame = _read_index(index_file).set_index(["index_name", "date"]).sort_index()
+        s = benchmark_series(frame, "Nifty 500")
+        assert s.iloc[0] == pytest.approx(23530.30)
+
+    def test_a_missing_index_names_what_is_available(self, index_file):
+        from src.data.nse_source import _read_index, benchmark_series
+        frame = _read_index(index_file).set_index(["index_name", "date"]).sort_index()
+        with pytest.raises(KeyError, match="not in the cache"):
+            benchmark_series(frame, "Nifty Nonexistent")
+
+    def test_sectoral_indices_are_available_too(self, index_file):
+        from src.data.nse_source import _read_index, benchmark_series
+        frame = _read_index(index_file).set_index(["index_name", "date"]).sort_index()
+        assert benchmark_series(frame, "Nifty Financial Services").iloc[0] == pytest.approx(28400.0)
+
+    def test_the_index_fetcher_rejects_a_stale_body(self):
+        import importlib.util
+        from datetime import date as _date
+
+        spec = importlib.util.spec_from_file_location(
+            "fetch_index_close", "scripts/fetch_index_close.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        body = (IDX_HDR + "\n" + idx_row("Nifty 500", "21-08-2026", 23530.3)).encode()
+        assert mod._dates_match(body, _date(2026, 8, 21))
+        assert not mod._dates_match(body, _date(2026, 8, 22))
