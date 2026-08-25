@@ -1,0 +1,81 @@
+# All tunable strategy parameters. Logic lives in code, numbers live here.
+# Nothing in src/ should contain a hardcoded threshold.
+
+long_pullback:
+  trend:
+    price_above_sma: 50
+    sma_fast_above_slow: [50, 200]
+    require_higher_high_low: true
+    pivot_lookback: 5          # bars each side to qualify a swing pivot
+    min_swing_points: 2        # HH/HL pairs needed to call it an uptrend
+  momentum:
+    rsi_period: 14
+    rsi_min: 30
+    rsi_max: 60
+  confirmation:               # scored, not gating
+    stochastic: {k: 14, d: 3, smooth: 3, oversold: 20}
+    macd: {fast: 12, slow: 26, signal: 9}
+    volume_dryup_ratio: 0.7   # pullback vol vs 20d avg
+    volume_expansion_ratio: 1.5
+    anchored_vwap_from: last_swing_low
+    cpr_timeframe: weekly     # NOT daily - daily CPR is an intraday tool
+    relative_strength_periods: [21, 63]
+
+short_breakdown:
+  universe: fno_only          # cash equity cannot be held short overnight in India
+  trend:
+    price_below_sma: 50
+    sma_fast_below_slow: [50, 200]
+    require_lower_high_low: true
+  momentum:
+    rsi_period: 14
+    rsi_min: 40
+    rsi_max: 70               # bounced into resistance, not already collapsed
+  confirmation:
+    rejection_at: [prior_support_turned_resistance, declining_sma_20]
+
+fundamental:
+  long_gate:
+    min_roce: null            # TODO set after sector-adjusted calibration
+    min_roe: null
+    max_debt_to_equity: null
+    min_ocf_to_pat: null      # earnings quality
+    max_promoter_pledge_pct: null
+    revenue_growth_3y_min: null
+  short_flag:
+    margin_trend: declining
+    debt_trend: rising
+    ocf_negative: true
+    pledge_increasing: true
+  sector_overrides:           # banking/NBFC metrics differ - do not apply one set
+    BANKING: {}
+    NBFC: {}
+
+institutional:
+  shareholding_qoq_lookback: 4
+  bulk_deal_lookback_days: 90
+  delivery_pct_vs_avg_days: 30
+
+futures:
+  oi_buildup_lookback: 5
+  rollover_window_days: 5
+
+scoring:
+  weights:                    # must sum to 1.0 - validated at load
+    technical_setup: 0.30
+    fundamental: 0.30
+    institutional: 0.20
+    futures_confirmation: 0.10
+    relative_strength: 0.10
+  top_n_long: 10
+  top_n_short: 5
+
+risk:
+  # TODO port exact formula from existing Excel swing system before going live
+  risk_per_trade_pct: null
+  atr_period: 14
+  atr_stop_buffer: null
+  max_concurrent_positions: null
+  max_sector_exposure_pct: null
+  max_aggregate_open_risk_pct: null
+  time_stop_bars: null
