@@ -59,6 +59,16 @@ fundamental:
     BANKING: {}
     NBFC: {}
 
+data_quality:
+  # Runs between the data layer and the indicators. See src/data/quality.py for
+  # why - a single zero-volume carried-forward bar (confirmed present in the
+  # audit) sets True Range to 0, drags ATR down, and ATR is what the stop
+  # buffer multiplies and the stop is what sizes the position.
+  drop_zero_volume_bars: true
+  drop_flat_bars: true          # high == low: TR 0, and it is both a swing high and a swing low
+  max_stale_bar_pct: 5          # above this the SYMBOL is excluded, not cleaned and screened anyway
+  min_bars_required: 250        # 200 SMA needs 200 clean bars; leave headroom for the pullback window
+
 institutional:
   shareholding_qoq_lookback: 4
   bulk_deal_lookback_days: 90

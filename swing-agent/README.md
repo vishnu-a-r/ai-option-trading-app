@@ -1,13 +1,20 @@
 # Nifty 500 Swing Momentum Agent — skeleton
 
-Scaffolding only. Every module is signatures and intent; no logic is implemented.
-Read `SPEC.md` first, then answer its Section 12 questions before writing code.
+Mostly scaffolding: signatures and intent. Two modules are implemented and
+tested — `src/data/quality.py` and `pivots.swing_points()` — because they are
+pure functions that need no live data source. Everything else is still stubs.
+
+Read `SPEC.md` first, then **`DATA_AUDIT.md`** — the data foundation is not
+confirmed and that is currently the blocker, not the code.
 
 ## Build order
 
 1. **Data availability audit** — Section 12 of SPEC.md. Which sources in
    `src/data/` can actually be reached, free vs paid, where the gaps are.
    Report back before implementing anything.
+   *Partially done — see `DATA_AUDIT.md`. Result: 70% of the composite score
+   has no confirmed source and the price feed reached is on the wrong exchange.
+   Resolve NSE access before strategy work.*
 2. **Data layer** — implement the Protocols in `src/data/base.py`. Cache to disk.
 3. **Indicators** — `src/indicators/`, with tests. `pivots.swing_points()` is the
    foundation for all structure detection; test it before building on it.
@@ -41,6 +48,11 @@ The short universe is the stock futures list, not the Nifty 500.
 **The short screen is not an inverted long screen.** It needs independently
 negative fundamentals. Inverting the long screen surfaces strong companies in
 temporary pullbacks — the worst possible short.
+
+**Pivots are not knowable when they print.** `swing_points()` returns a
+`confirmed_at_bar` column; the backtest must filter on it rather than on the
+pivot's own bar index. Getting this wrong lets the screen see a swing low days
+before the market did and flatters every entry price in the run.
 
 ## Not in scope
 
