@@ -1,0 +1,124 @@
+//@version=6
+// =============================================================================
+// Nifty 500 swing pullback — TradingView mirror of src/screens/long_pullback.py
+//
+// PURPOSE: this is a CROSS-CHECK, not a better backtest. The Python engine does
+// things TradingView cannot — multi-symbol portfolio simulation, the sector and
+// deployed-capital caps, 478 symbols at once. This script runs ONE symbol.
+//
+// Its value is independence. If this and the Python engine disagree materially
+// on the same symbol over the same window, one of them has a bug, and no unit
+// test would find it. Compare trade-by-trade, not just the summary.
+//
+// MATCHED DELIBERATELY:
+//   ta.rsi  uses Wilder smoothing (ta.rma) — matches indicators/momentum.rsi
+//   ta.atr  uses Wilder smoothing        — matches indicators/trend.atr
+//   ta.pivotlow(5,5) confirms 5 bars after the pivot prints — this is the same
+//     rule as confirmed_at_bar in indicators/pivots.swing_points, and it is the
+//     one thing most likely to be got wrong in a naive Pine port
+//   entry fills at the NEXT bar's open (Pine's default), matching the engine
+//
+// KNOWN DIFFERENCES — expect these, they are not bugs:
+//   * no portfolio caps: no max_concurrent_positions, no sector cap, no
+//     deployed-capital cap. This script will take trades the engine refuses.
+//   * no quality screening: the engine drops symbols with stale or missing
+//     bars; TradingView serves whatever it has.
+//   * TradingView's OHLC may differ slightly from NSE bhavcopy on some days.
+//   * costs here are one blended percentage; the engine itemises STT, stamp
+//     duty, GST and a per-scrip DP charge, so small positions differ most.
+// =============================================================================
+
+strategy("Nifty500 Swing Pullback (cross-check)",
+     overlay              = true,
+     initial_capital      = 200000,
+     default_qty_type     = strategy.fixed,
+     currency             = currency.INR,
+     commission_type      = strategy.commission.percent,
+     // 0.13% fees + 0.05% slippage per side ≈ 0.36% round trip, which is what
+     // src/risk/costs.py measured (0.057 R/trade drag). Set per side.
+     commission_value     = 0.18,
+     process_orders_on_close = false,
+     calc_on_every_tick   = false)
+
+// ---- inputs: defaults mirror config/strategy.yaml ---------------------------
+smaGate      = input.int(50,   "Price above SMA",        group="Gates")
+smaFast      = input.int(50,   "SMA fast",               group="Gates")
+smaSlow      = input.int(200,  "SMA slow",               group="Gates")
+rsiLen       = input.int(14,   "RSI length",             group="Gates")
+rsiMin       = input.float(30, "RSI min",                group="Gates")
+rsiMax       = input.float(60, "RSI max",                group="Gates")
+pivotLB      = input.int(5,    "Pivot lookback",         group="Gates")
+minPairs     = input.int(2,    "Ascending HH/HL pairs",  group="Gates")
+
+atrLen       = input.int(14,   "ATR length",             group="Risk")
+atrBuffer    = input.float(0.5,"ATR stop buffer",        group="Risk")
+riskPct      = input.float(1.0,"Risk per trade %",       group="Risk")
+maxPosPct    = input.float(25, "Max position % capital", group="Risk")
+timeStopBars = input.int(15,   "Time stop (bars)",       group="Risk")
+
+// ---- indicators -------------------------------------------------------------
+smaG  = ta.sma(close, smaGate)
+smaF  = ta.sma(close, smaFast)
+smaS  = ta.sma(close, smaSlow)
+rsiV  = ta.rsi(close, rsiLen)
+atrV  = ta.atr(atrLen)
+
+// ---- confirmed swing pivots -------------------------------------------------
+// ta.pivothigh/low return a value only once `pivotLB` bars have passed, so a
+// pivot is not visible until the market confirmed it. Same rule as
+// confirmed_at_bar. Do NOT replace this with a lookahead-free-looking
+// `ta.highest()` — that would let the strategy see a low before it was known.
+ph = ta.pivothigh(high, pivotLB, pivotLB)
+pl = ta.pivotlow(low,  pivotLB, pivotLB)
+
+var float hi1 = na, var float hi2 = na
+var float lo1 = na, var float lo2 = na
+if not na(ph)
+    hi2 := hi1
+    hi1 := ph
+if not na(pl)
+    lo2 := lo1
+    lo1 := pl
+
+// Ascending highs AND ascending lows over the last `minPairs` confirmed pivots.
+structureOk = minPairs <= 1 ? (not na(hi1) and not na(lo1))
+     : (not na(hi1) and not na(hi2) and not na(lo1) and not na(lo2)
+        and hi1 > hi2 and lo1 > lo2)
+
+// ---- gates (all must hold) --------------------------------------------------
+gPrice = close > smaG
+gTrend = smaF > smaS
+gRsi   = rsiV >= rsiMin and rsiV <= rsiMax
+gaters = gPrice and gTrend and gRsi and structureOk and not na(smaS)
+
+// ---- stop: structural, never a fixed percentage -----------------------------
+// If there is no confirmed swing low there is NO TRADE. Do not substitute a
+// percentage stop here — see the comment on atr_stop_buffer in strategy.yaml.
+stopLevel = na(lo1) or na(atrV) ? na : lo1 - atrBuffer * atrV
+stopValid = not na(stopLevel) and stopLevel < close
+
+// ---- sizing: fixed rupee risk, quantity derived, then capped ----------------
+riskAmount  = strategy.initial_capital * riskPct / 100.0
+perShare    = close - stopLevel
+wantedQty   = perShare > 0 ? riskAmount / perShare : 0.0
+capQty      = strategy.initial_capital * maxPosPct / 100.0 / close
+qty         = math.floor(math.min(wantedQty, capQty))
+
+canEnter = gaters and stopValid and qty >= 1 and strategy.position_size == 0
+
+if canEnter
+    strategy.entry("long", strategy.direction.long, qty = qty)
+
+// ---- exits: stop, or the time stop. No target — none is configured. ---------
+if strategy.position_size > 0
+    barsHeld = bar_index - strategy.opentrades.entry_bar_index(0)
+    strategy.exit("stop", from_entry = "long", stop = stopLevel)
+    if barsHeld >= timeStopBars
+        strategy.close("long", comment = "time_stop")
+
+// ---- plots ------------------------------------------------------------------
+plot(smaF, "SMA fast", color.new(color.blue, 0))
+plot(smaS, "SMA slow", color.new(color.orange, 0))
+plot(strategy.position_size > 0 ? stopLevel : na, "Stop", color.new(color.red, 0),
+     style = plot.style_linebr)
+bgcolor(canEnter ? color.new(color.green, 88) : na)
