@@ -45,6 +45,7 @@ from ..indicators.momentum import histogram_contracting, macd, rsi, stochastic
 from ..indicators.pivots import swing_points
 from ..indicators.trend import atr, sma
 from ..indicators.volume import volume_dryup
+from ..risk.costs import CostBreakdown, apply_slippage, round_trip
 from ..risk.sizing import Position, portfolio_gates, size_with_reason
 
 TRENDING = "trending"
@@ -63,23 +64,41 @@ class Trade:
     exit_price: float | None = None
     exit_reason: str = ""
     regime: str = ""
+    costs: CostBreakdown = field(default_factory=CostBreakdown)
 
     @property
     def risk_per_share(self) -> float:
         return self.entry_price - self.stop_price
 
     @property
-    def r_multiple(self) -> float:
-        """Result in units of the amount risked. The only comparable measure."""
-        if self.exit_price is None or self.risk_per_share <= 0:
-            return 0.0
-        return (self.exit_price - self.entry_price) / self.risk_per_share
-
-    @property
-    def pnl(self) -> float:
+    def gross_pnl(self) -> float:
         if self.exit_price is None:
             return 0.0
         return self.qty * (self.exit_price - self.entry_price)
+
+    @property
+    def pnl(self) -> float:
+        """NET of transaction costs. Entry and exit prices already carry slippage."""
+        return self.gross_pnl - self.costs.total
+
+    @property
+    def r_multiple(self) -> float:
+        """Result in units of the amount risked, NET of costs.
+
+        Net is the default rather than an alternative view: a gross R is a
+        number nobody can earn, and reporting it as the headline is how a
+        backtest quietly overstates an edge that costs would have eaten.
+        """
+        if self.exit_price is None or self.risk_per_share <= 0:
+            return 0.0
+        return self.pnl / (self.qty * self.risk_per_share)
+
+    @property
+    def gross_r_multiple(self) -> float:
+        """Before costs. Kept only so their size is visible, never as the headline."""
+        if self.exit_price is None or self.risk_per_share <= 0:
+            return 0.0
+        return (self.exit_price - self.entry_price) / self.risk_per_share
 
 
 @dataclass
@@ -92,6 +111,8 @@ class BacktestReport:
     by_regime: dict[str, dict]
     survivorship_corrected: bool
     notes: list[str]
+    avg_r_gross: float = 0.0
+    cost_drag_r: float = 0.0
     equity_curve: pd.Series = field(default_factory=pd.Series)
     trade_log: list[Trade] = field(default_factory=list)
     exit_reasons: dict[str, int] = field(default_factory=dict)
@@ -100,7 +121,9 @@ class BacktestReport:
         lines = [
             f"trades                 {self.trades}",
             f"win rate               {100 * self.win_rate:.1f}%",
-            f"average R              {self.avg_r:+.3f}",
+            f"average R (net)        {self.avg_r:+.3f}",
+            f"  gross                {self.avg_r_gross:+.3f}",
+            f"  cost drag            {self.cost_drag_r:.3f} R/trade",
             f"max drawdown           {100 * self.max_drawdown:.1f}%",
             f"longest losing streak  {self.longest_losing_streak}",
         ]
@@ -287,7 +310,10 @@ def run(
                 still_open.append(trade)
                 continue
 
-            trade.exit_date, trade.exit_price, trade.exit_reason = day, exit_price, reason
+            trade.exit_date = day
+            trade.exit_price = apply_slippage(exit_price, "sell", cfg)
+            trade.exit_reason = reason
+            trade.costs = round_trip(trade.entry_price, trade.exit_price, trade.qty, cfg)
             equity += trade.pnl
             closed.append(trade)
             bars_held.pop(trade.symbol, None)
@@ -299,7 +325,7 @@ def run(
             t = _index_of(p, day)
             if t is None:
                 continue
-            entry = p.open[t]
+            entry = apply_slippage(p.open[t], "buy", cfg)
             if entry <= stop:                      # gapped through the stop overnight
                 continue
             qty, _ = size_with_reason(entry, stop, capital, cfg)
@@ -410,10 +436,14 @@ def _report(closed: list[Trade], curve, capital: float, cfg: dict) -> BacktestRe
 
     equity_curve = pd.Series(dict(curve)).sort_index() if curve else pd.Series(dtype=float)
     if not closed:
-        return BacktestReport(0, 0.0, 0.0, 0.0, 0, {}, False, notes + ["No trades."], equity_curve)
+        return BacktestReport(
+            0, 0.0, 0.0, 0.0, 0, {}, False, notes + ["No trades."], equity_curve
+        )
 
     r_values = [t.r_multiple for t in closed]
+    gross_values = [t.gross_r_multiple for t in closed]
     wins = [r for r in r_values if r > 0]
+    cost_drag = float(np.mean(gross_values) - np.mean(r_values))
 
     exit_reasons: dict[str, int] = {}
     for t in closed:
@@ -434,6 +464,8 @@ def _report(closed: list[Trade], curve, capital: float, cfg: dict) -> BacktestRe
         trades=len(closed),
         win_rate=len(wins) / len(closed),
         avg_r=float(np.mean(r_values)),
+        avg_r_gross=float(np.mean(gross_values)),
+        cost_drag_r=cost_drag,
         max_drawdown=_max_drawdown(equity_curve),
         longest_losing_streak=_longest_losing_streak(closed),
         by_regime=by_regime,

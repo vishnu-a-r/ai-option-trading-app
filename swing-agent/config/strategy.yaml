@@ -64,6 +64,34 @@ futures:
   oi_buildup_lookback: 5
   rollover_window_days: 5
 
+costs:
+  # Transaction costs for DELIVERY EQUITY, long-only cash. Without these the
+  # backtest is not merely imprecise, it is wrong in a specific direction:
+  # every omitted cost flatters the result, and on a typical 5% stop distance
+  # a round trip is roughly 0.02-0.06 R - the same order as the entire measured
+  # edge. See BACKTEST.md.
+  #
+  # THESE ARE DEFAULTS, NOT YOUR RATES. They reflect the common Indian
+  # discount-broker structure as of 2026-08. Brokerage varies by broker,
+  # statutory rates change with regulation, and DP charges differ by depository
+  # participant. Replace them with figures from your own contract note before
+  # trusting any number derived from them.
+  brokerage_pct: 0.0            # many discount brokers charge nothing on delivery
+  brokerage_flat_inr: 0.0       # ...others charge a flat fee per executed order
+  stt_buy_pct: 0.1              # securities transaction tax, delivery, buy side
+  stt_sell_pct: 0.1             # and sell side
+  exchange_txn_pct: 0.00325     # NSE transaction charge, each side
+  sebi_turnover_pct: 0.0001     # each side
+  stamp_duty_buy_pct: 0.015     # buy side only
+  gst_pct: 18.0                 # on brokerage + exchange + SEBI charges
+  dp_charge_sell_inr: 15.93     # per scrip on sell, regardless of quantity
+
+  # Slippage is NOT a fee - it is the gap between the modelled fill and the
+  # real one, applied to the price itself on both sides. Modelled separately
+  # because it scales with liquidity and order size while the fees above do not.
+  # A small-cap at the open will not fill where a large-cap does.
+  slippage_pct: 0.05            # each side
+
 scoring:
   weights:                    # must sum to 1.0 - validated at load
     technical_setup: 0.30
